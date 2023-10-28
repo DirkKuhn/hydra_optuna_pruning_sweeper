@@ -6,7 +6,6 @@ from typing import (
     Callable,
     Dict,
     List,
-    MutableMapping,
     MutableSequence,
     Optional,
     Sequence,
@@ -27,6 +26,7 @@ from hydra.plugins.sweeper import Sweeper
 from hydra.types import HydraContext, TaskFunction
 from hydra.utils import get_method
 from omegaconf import DictConfig, OmegaConf
+from optuna import Study
 from optuna.distributions import (
     BaseDistribution,
     CategoricalChoiceType,
@@ -35,8 +35,11 @@ from optuna.distributions import (
     FloatDistribution
 )
 from optuna.trial import Trial
+from optuna.study import MaxTrialsCallback
+from optuna.integration import DaskStorage
 
-from .config import SamplerConfig, Direction, DistributionConfig, DistributionType
+from .config import SamplerConfig, Direction
+import hydra_plugins.trial_provider
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +68,11 @@ class CustomOptunaSweeper(Sweeper):
         if custom_search_space:
             self.custom_search_space_extender = get_method(custom_search_space)
         self.params = params
-        self.job_idx: int = 0
+
+        self.search_space_distributions: Optional[Dict[str, BaseDistribution]] = None
+        self.fixed_params: Optional[Dict[str, Any]] = None
+        self.num_directions: int = len(self.direction) \
+            if isinstance(self.direction, MutableSequence) else 1
 
     def setup(
             self,
@@ -74,7 +81,6 @@ class CustomOptunaSweeper(Sweeper):
             task_function: TaskFunction,
             config: DictConfig,
     ) -> None:
-        self.job_idx = 0
         self.config = config
         self.hydra_context = hydra_context
         self.launcher = Plugins.instance().instantiate_launcher(
@@ -86,7 +92,6 @@ class CustomOptunaSweeper(Sweeper):
         assert self.config is not None
         assert self.launcher is not None
         assert self.hydra_context is not None
-        assert self.job_idx is not None
 
         if self.params is None:
             self.params = OmegaConf.create({})
@@ -95,8 +100,8 @@ class CustomOptunaSweeper(Sweeper):
         params_conf.extend(arguments)
 
         (
-            search_space_distributions,
-            fixed_params,
+            self.search_space_distributions,
+            self.fixed_params,
         ) = create_params_from_overrides(params_conf)
 
         is_grid_sampler = (
@@ -104,15 +109,39 @@ class CustomOptunaSweeper(Sweeper):
             and self.sampler.func == optuna.samplers.GridSampler
         )
         if is_grid_sampler:
-            self._setup_grid_sampler(search_space_distributions)
+            self._setup_grid_sampler()
 
         # Remove fixed parameters from Optuna search space.
-        for param_name in fixed_params:
-            if param_name in search_space_distributions:
-                del search_space_distributions[param_name]
+        for param_name in self.fixed_params:
+            if param_name in self.search_space_distributions:
+                del self.search_space_distributions[param_name]
 
         directions = self._get_directions()
 
+        if self.n_jobs == 1:
+            study = self._create_study(directions)
+            study.optimize(func=self._run_trial, n_trials=self.n_trials)
+            self._serialize_results(study, len(directions))
+
+        else:
+            from dask.distributed import Client, wait
+
+            with Client(n_workers=self.n_jobs) as client:
+                print(f"Dask dashboard is available at {client.dashboard_link}")
+                self.storage = DaskStorage(storage=self.storage, client=client)
+                study = self._create_study(directions)
+                futures = [
+                    client.submit(
+                        study.optimize,
+                        self._run_trial,
+                        callbacks=[MaxTrialsCallback(n_trials=self.n_trials, states=None)],
+                        pure=False
+                    ) for _ in range(self.n_jobs)
+                ]
+                wait(futures)
+                self._serialize_results(study, len(directions))
+
+    def _create_study(self, directions: List[str]) -> Study:
         study = optuna.create_study(
             study_name=self.study_name,
             storage=self.storage,
@@ -124,19 +153,7 @@ class CustomOptunaSweeper(Sweeper):
         log.info(f"Storage: {self.storage}")
         log.info(f"Sampler: {type(self.sampler).__name__}")
         log.info(f"Directions: {directions}")
-
-        if self.n_jobs == 1:
-            study.optimize(
-                func=lambda trial: self._run_trial(
-                    trial, search_space_distributions, fixed_params, len(directions)
-                ),
-                n_trials=self.n_trials
-            )
-
-        else:
-            raise NotImplementedError
-
-        self._serialize_results(study, len(directions))
+        return study
 
     def _parse_sweeper_params_config(self) -> List[str]:
         if not self.params:
@@ -144,10 +161,10 @@ class CustomOptunaSweeper(Sweeper):
 
         return [f"{k!s}={v}" for k, v in self.params.items()]
 
-    def _setup_grid_sampler(self, search_space_distributions: Dict[str, BaseDistribution]):
+    def _setup_grid_sampler(self):
         search_space_for_grid_sampler = {
             name: _to_grid_sampler_choices(distribution)
-            for name, distribution in search_space_distributions.items()
+            for name, distribution in self.search_space_distributions.items()
         }
         self.sampler = self.sampler(search_space_for_grid_sampler)
         n_trial = 1
@@ -165,48 +182,14 @@ class CustomOptunaSweeper(Sweeper):
             return [self.direction]
         return [self.direction.name]
 
-    def _configure_trials(
-            self,
-            trials: List[Trial],
-            search_space_distributions: Dict[str, BaseDistribution],
-            fixed_params: Dict[str, Any],
-    ) -> Sequence[Sequence[str]]:
-        overrides = []
-        for trial in trials:
-            for param_name, distribution in search_space_distributions.items():
-                assert type(param_name) is str
-                trial._suggest(param_name, distribution)
-            for param_name, value in fixed_params.items():
-                trial.set_user_attr(param_name, value)
+    def _run_trial(self, trial: Trial) -> float | Sequence[float]:
+        # Share trial with task_function
+        hydra_plugins.trial_provider.trial = trial
 
-            if self.custom_search_space_extender:
-                assert self.config is not None
-                self.custom_search_space_extender(self.config, trial)
+        overrides = self._configure_trial(trial)
+        [ret] = self.launcher.launch([overrides], initial_job_idx=trial.number)
 
-            overlap = trial.params.keys() & trial.user_attrs
-            if len(overlap):
-                raise ValueError(
-                    "Overlapping fixed parameters and search space parameters found!"
-                    f"Overlapping parameters: {list(overlap)}"
-                )
-            params = dict(trial.params)
-            params.update(fixed_params)
-
-            overrides.append(tuple(f"{name}={val}" for name, val in params.items()))
-        return overrides
-
-    def _run_trial(
-            self,
-            trial: Trial,
-            search_space_distributions: Dict[str, BaseDistribution],
-            fixed_params: Dict[str, Any],
-            expected_num_output: int
-    ) -> float | Sequence[float]:
-        overrides = self._configure_trials(
-            [trial], search_space_distributions, fixed_params
-        )
-        [ret] = self.launcher.launch(overrides, initial_job_idx=trial.number)
-        if expected_num_output == 1:
+        if self.num_directions == 1:
             try:
                 values = [float(ret.return_value)]
             except (ValueError, TypeError):
@@ -221,14 +204,36 @@ class CustomOptunaSweeper(Sweeper):
                     "Return value must be a list or tuple of float-castable values."
                     f" Got '{ret.return_value}'."
                 ).with_traceback(sys.exc_info()[2])
-            if len(values) != expected_num_output:
+            if len(values) != self.num_directions:
                 raise ValueError(
                     "The number of the values and the number of the objectives are"
-                    f" mismatched. Expect {expected_num_output}, but actually {len(values)}."
+                    f" mismatched. Expect {self.num_directions}, but actually {len(values)}."
                 )
         return values
 
-    def _serialize_results(self, study: optuna.Study, num_directions: int) -> None:
+    def _configure_trial(self, trial: Trial) -> Sequence[str]:
+        for param_name, distribution in self.search_space_distributions.items():
+            assert type(param_name) is str
+            trial._suggest(param_name, distribution)
+        for param_name, value in self.fixed_params.items():
+            trial.set_user_attr(param_name, value)
+
+        if self.custom_search_space_extender:
+            assert self.config is not None
+            self.custom_search_space_extender(self.config, trial)
+
+        overlap = trial.params.keys() & trial.user_attrs
+        if len(overlap):
+            raise ValueError(
+                "Overlapping fixed parameters and search space parameters found!"
+                f"Overlapping parameters: {list(overlap)}"
+            )
+        params = dict(trial.params)
+        params.update(self.fixed_params)
+
+        return tuple(f"{name}={val}" for name, val in params.items())
+
+    def _serialize_results(self, study: Study, num_directions: int) -> None:
         results_to_serialize: Dict[str, Any]
         if num_directions < 2:
             best_trial = study.best_trial

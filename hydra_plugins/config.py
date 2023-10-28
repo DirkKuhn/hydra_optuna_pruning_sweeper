@@ -7,12 +7,6 @@ from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING
 
 
-class DistributionType(Enum):
-    int = 1
-    float = 2
-    categorical = 3
-
-
 class Direction(Enum):
     minimize = 1
     maximize = 2
@@ -116,30 +110,6 @@ class MOTPESamplerConfig(SamplerConfig):
     consider_endpoints: bool = False
     n_startup_trials: int = 10
     n_ehvi_candidates: int = 24
-
-
-@dataclass
-class DistributionConfig:
-    # Type of distribution. "int", "float" or "categorical"
-    type: DistributionType
-
-    # Choices of categorical distribution
-    # List element type should be Union[str, int, float, bool]
-    choices: Optional[List[Any]] = None
-
-    # Lower bound of int or float distribution
-    low: Optional[float] = None
-
-    # Upper bound of int or float distribution
-    high: Optional[float] = None
-
-    # If True, space is converted to the log domain
-    # Valid for int or float distribution
-    log: bool = False
-
-    # Discritization step
-    # Valid for int or float distribution
-    step: Optional[float] = None
 
 
 defaults = [{"sampler": "tpe"}]
