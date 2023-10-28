@@ -82,11 +82,81 @@ class CustomOptunaSweeper(Sweeper):
         )
         self.sweep_dir = config.hydra.sweep.dir
 
+    def sweep(self, arguments: List[str]) -> None:
+        assert self.config is not None
+        assert self.launcher is not None
+        assert self.hydra_context is not None
+        assert self.job_idx is not None
+
+        if self.params is None:
+            self.params = OmegaConf.create({})
+
+        params_conf = self._parse_sweeper_params_config()
+        params_conf.extend(arguments)
+
+        (
+            search_space_distributions,
+            fixed_params,
+        ) = create_params_from_overrides(params_conf)
+
+        is_grid_sampler = (
+            isinstance(self.sampler, functools.partial)
+            and self.sampler.func == optuna.samplers.GridSampler
+        )
+        if is_grid_sampler:
+            self._setup_grid_sampler(search_space_distributions)
+
+        # Remove fixed parameters from Optuna search space.
+        for param_name in fixed_params:
+            if param_name in search_space_distributions:
+                del search_space_distributions[param_name]
+
+        directions = self._get_directions()
+
+        study = optuna.create_study(
+            study_name=self.study_name,
+            storage=self.storage,
+            sampler=self.sampler,
+            directions=directions,
+            load_if_exists=True,
+        )
+        log.info(f"Study name: {study.study_name}")
+        log.info(f"Storage: {self.storage}")
+        log.info(f"Sampler: {type(self.sampler).__name__}")
+        log.info(f"Directions: {directions}")
+
+        if self.n_jobs == 1:
+            study.optimize(
+                func=lambda trial: self._run_trial(
+                    trial, search_space_distributions, fixed_params, len(directions)
+                ),
+                n_trials=self.n_trials
+            )
+
+        else:
+            raise NotImplementedError
+
+        self._serialize_results(study, len(directions))
+
     def _parse_sweeper_params_config(self) -> List[str]:
         if not self.params:
             return []
 
         return [f"{k!s}={v}" for k, v in self.params.items()]
+
+    def _setup_grid_sampler(self, search_space_distributions: Dict[str, BaseDistribution]):
+        search_space_for_grid_sampler = {
+            name: _to_grid_sampler_choices(distribution)
+            for name, distribution in search_space_distributions.items()
+        }
+        self.sampler = self.sampler(search_space_for_grid_sampler)
+        n_trial = 1
+        for v in search_space_for_grid_sampler.values():
+            n_trial *= len(v)
+        self.n_trials = min(self.n_trials, n_trial)
+        log.info(
+            f"Updating num of trials to {self.n_trials} due to using GridSampler."
+        )
 
     def _get_directions(self) -> List[str]:
         if isinstance(self.direction, MutableSequence):
@@ -125,123 +195,42 @@ class CustomOptunaSweeper(Sweeper):
             overrides.append(tuple(f"{name}={val}" for name, val in params.items()))
         return overrides
 
-    def sweep(self, arguments: List[str]) -> None:
-        assert self.config is not None
-        assert self.launcher is not None
-        assert self.hydra_context is not None
-        assert self.job_idx is not None
-
-        if self.params is None:
-            self.params = OmegaConf.create({})
-
-        params_conf = self._parse_sweeper_params_config()
-        params_conf.extend(arguments)
-
-        is_grid_sampler = (
-            isinstance(self.sampler, functools.partial)
-            and self.sampler.func == optuna.samplers.GridSampler
+    def _run_trial(
+            self,
+            trial: Trial,
+            search_space_distributions: Dict[str, BaseDistribution],
+            fixed_params: Dict[str, Any],
+            expected_num_output: int
+    ) -> float | Sequence[float]:
+        overrides = self._configure_trials(
+            [trial], search_space_distributions, fixed_params
         )
+        [ret] = self.launcher.launch(overrides, initial_job_idx=trial.number)
+        if expected_num_output == 1:
+            try:
+                values = [float(ret.return_value)]
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"Return value must be float-castable. Got '{ret.return_value}'."
+                ).with_traceback(sys.exc_info()[2])
+        else:
+            try:
+                values = [float(v) for v in ret.return_value]
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "Return value must be a list or tuple of float-castable values."
+                    f" Got '{ret.return_value}'."
+                ).with_traceback(sys.exc_info()[2])
+            if len(values) != expected_num_output:
+                raise ValueError(
+                    "The number of the values and the number of the objectives are"
+                    f" mismatched. Expect {expected_num_output}, but actually {len(values)}."
+                )
+        return values
 
-        (
-            search_space_distributions,
-            fixed_params,
-        ) = create_params_from_overrides(params_conf)
-
-        if is_grid_sampler:
-            search_space_for_grid_sampler = {
-                name: _to_grid_sampler_choices(distribution)
-                for name, distribution in search_space_distributions.items()
-            }
-
-            self.sampler = self.sampler(search_space_for_grid_sampler)
-            n_trial = 1
-            for v in search_space_for_grid_sampler.values():
-                n_trial *= len(v)
-            self.n_trials = min(self.n_trials, n_trial)
-            log.info(
-                f"Updating num of trials to {self.n_trials} due to using GridSampler."
-            )
-
-        # Remove fixed parameters from Optuna search space.
-        for param_name in fixed_params:
-            if param_name in search_space_distributions:
-                del search_space_distributions[param_name]
-
-        directions = self._get_directions()
-
-        study = optuna.create_study(
-            study_name=self.study_name,
-            storage=self.storage,
-            sampler=self.sampler,
-            directions=directions,
-            load_if_exists=True,
-        )
-        log.info(f"Study name: {study.study_name}")
-        log.info(f"Storage: {self.storage}")
-        log.info(f"Sampler: {type(self.sampler).__name__}")
-        log.info(f"Directions: {directions}")
-
-        batch_size = self.n_jobs
-        n_trials_to_go = self.n_trials
-
-        while n_trials_to_go > 0:
-            batch_size = min(n_trials_to_go, batch_size)
-
-            trials = [study.ask() for _ in range(batch_size)]
-            overrides = self._configure_trials(
-                trials, search_space_distributions, fixed_params
-            )
-
-            returns = self.launcher.launch(overrides, initial_job_idx=self.job_idx)
-            self.job_idx += len(returns)
-            failures = []
-            for trial, ret in zip(trials, returns):
-                values: Optional[List[float]] = None
-                state: optuna.trial.TrialState = optuna.trial.TrialState.COMPLETE
-                try:
-                    if len(directions) == 1:
-                        try:
-                            values = [float(ret.return_value)]
-                        except (ValueError, TypeError):
-                            raise ValueError(
-                                f"Return value must be float-castable. Got '{ret.return_value}'."
-                            ).with_traceback(sys.exc_info()[2])
-                    else:
-                        try:
-                            values = [float(v) for v in ret.return_value]
-                        except (ValueError, TypeError):
-                            raise ValueError(
-                                "Return value must be a list or tuple of float-castable values."
-                                f" Got '{ret.return_value}'."
-                            ).with_traceback(sys.exc_info()[2])
-                        if len(values) != len(directions):
-                            raise ValueError(
-                                "The number of the values and the number of the objectives are"
-                                f" mismatched. Expect {len(directions)}, but actually {len(values)}."
-                            )
-
-                    try:
-                        study.tell(trial=trial, state=state, values=values)
-                    except RuntimeError as e:
-                        if (
-                                is_grid_sampler
-                                and "`Study.stop` is supposed to be invoked inside an objective function or a callback."
-                                in str(e)
-                        ):
-                            pass
-                        else:
-                            raise e
-
-                except Exception as e:
-                    state = optuna.trial.TrialState.FAIL
-                    study.tell(trial=trial, state=state, values=values)
-                    log.warning(f"Failed experiment: {e}")
-                    failures.append(e)
-
-            n_trials_to_go -= batch_size
-
+    def _serialize_results(self, study: optuna.Study, num_directions: int) -> None:
         results_to_serialize: Dict[str, Any]
-        if len(directions) < 2:
+        if num_directions < 2:
             best_trial = study.best_trial
             results_to_serialize = {
                 "name": "optuna",
@@ -266,34 +255,6 @@ class CustomOptunaSweeper(Sweeper):
             OmegaConf.create(results_to_serialize),
             f"{self.config.hydra.sweep.dir}/optimization_results.yaml",
         )
-
-
-def create_optuna_distribution_from_config(
-        config: MutableMapping[str, Any]
-) -> BaseDistribution:
-    kwargs = dict(config)
-    if isinstance(config["type"], str):
-        kwargs["type"] = DistributionType[config["type"]]
-    param = DistributionConfig(**kwargs)
-    if param.type == DistributionType.categorical:
-        assert param.choices is not None
-        return CategoricalDistribution(param.choices)
-    if param.type == DistributionType.int:
-        assert param.low is not None
-        assert param.high is not None
-        if param.log:
-            return IntDistribution(int(param.low), int(param.high), log=True)
-        step = int(param.step) if param.step is not None else 1
-        return IntDistribution(int(param.low), int(param.high), step=step)
-    if param.type == DistributionType.float:
-        assert param.low is not None
-        assert param.high is not None
-        if param.log:
-            return FloatDistribution(param.low, param.high, log=True)
-        if param.step is not None:
-            return FloatDistribution(param.low, param.high, step=param.step)
-        return FloatDistribution(param.low, param.high)
-    raise NotImplementedError(f"{param.type} is not supported by Optuna sweeper.")
 
 
 def create_params_from_overrides(
