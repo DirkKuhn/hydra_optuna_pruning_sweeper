@@ -50,7 +50,9 @@ class TPESamplerConfig(SamplerConfig):
     n_startup_trials: int = 10
     n_ei_candidates: int = 24
     multivariate: bool = False
+    group: bool = False
     warn_independent_sampling: bool = True
+    constant_liar: bool = False
 
 
 @dataclass
@@ -145,7 +147,7 @@ defaults = [{"sampler": "tpe"}]
 
 @dataclass
 class OptunaSweeperConf:
-    _target_: str = "hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper"
+    _target_: str = "hydra_plugins.custom_optuna_sweeper.CustomOptunaSweeper"
     defaults: List[Any] = field(default_factory=lambda: defaults)
 
     # Sampling algorithm
@@ -172,15 +174,10 @@ class OptunaSweeperConf:
     # Number of parallel workers
     n_jobs: int = 2
 
-    # Maximum authorized failure rate for a batch of parameters
-    max_failure_rate: float = 0.0
-
-    search_space: Optional[Dict[str, Any]] = None
-
     params: Optional[Dict[str, str]] = None
 
     # Allow custom trial configuration via Python methods.
-    # If given, `custom_search_space` should be a an instantiate-style dotpath targeting
+    # If given, `custom_search_space` should be an instantiate-style dotpath targeting
     # a callable with signature Callable[[DictConfig, optuna.trial.Trial], None].
     # https://optuna.readthedocs.io/en/stable/tutorial/10_key_features/002_configurations.html
     custom_search_space: Optional[str] = None
