@@ -1,8 +1,6 @@
 import functools
 import logging
 import sys
-import warnings
-from textwrap import dedent
 from typing import (
     Any,
     Callable,
@@ -16,7 +14,6 @@ from typing import (
 )
 
 import optuna
-from hydra._internal.deprecation_warning import deprecation_warning
 from hydra.core.override_parser.overrides_parser import OverridesParser
 from hydra.core.override_parser.types import (
     ChoiceSweep,
@@ -45,7 +42,7 @@ log = logging.getLogger(__name__)
 
 
 def create_optuna_distribution_from_config(
-    config: MutableMapping[str, Any]
+        config: MutableMapping[str, Any]
 ) -> BaseDistribution:
     kwargs = dict(config)
     if isinstance(config["type"], str):
@@ -99,9 +96,9 @@ def create_optuna_distribution_from_override(override: Override) -> Any:
                 choices.append(x)
             return CategoricalDistribution(choices)
         if (
-            isinstance(value.start, float)
-            or isinstance(value.stop, float)
-            or isinstance(value.step, float)
+                isinstance(value.start, float)
+                or isinstance(value.stop, float)
+                or isinstance(value.step, float)
         ):
             return FloatDistribution(value.start, value.stop, step=value.step)
         return IntDistribution(int(value.start), int(value.stop), step=int(value.step))
@@ -123,7 +120,7 @@ def create_optuna_distribution_from_override(override: Override) -> Any:
 
 
 def create_params_from_overrides(
-    arguments: List[str],
+        arguments: List[str],
 ) -> Tuple[Dict[str, BaseDistribution], Dict[str, Any]]:
     parser = OverridesParser.create()
     parsed = parser.parse_overrides(arguments)
@@ -149,7 +146,6 @@ class CustomOptunaSweeper(Sweeper):
             study_name: Optional[str],
             n_trials: int,
             n_jobs: int,
-            search_space: Optional[DictConfig],
             custom_search_space: Optional[str],
             params: Optional[DictConfig],
     ) -> None:
@@ -164,43 +160,21 @@ class CustomOptunaSweeper(Sweeper):
         ] = None
         if custom_search_space:
             self.custom_search_space_extender = get_method(custom_search_space)
-        self.search_space = search_space
         self.params = params
         self.job_idx: int = 0
         self.search_space_distributions: Optional[Dict[str, BaseDistribution]] = None
 
     def _process_searchspace_config(self) -> None:
         url = "https://hydra.cc/docs/upgrades/1.1_to_1.2/changes_to_sweeper_config/"
-        if self.params is None and self.search_space is None:
+        if self.params is None:
             self.params = OmegaConf.create({})
-        elif self.search_space is not None:
-            if self.params is not None:
-                warnings.warn(
-                    "Both hydra.sweeper.params and hydra.sweeper.search_space are configured."
-                    "\nHydra will use hydra.sweeper.params for defining search space."
-                    f"\n{url}"
-                )
-            else:
-                deprecation_warning(
-                    message=dedent(
-                        f"""\
-                        `hydra.sweeper.search_space` is deprecated and will be removed in the next major release.
-                        Please configure with `hydra.sweeper.params`.
-                        {url}
-                        """
-                    ),
-                )
-                self.search_space_distributions = {
-                    str(x): create_optuna_distribution_from_config(y)
-                    for x, y in self.search_space.items()
-                }
 
     def setup(
-        self,
-        *,
-        hydra_context: HydraContext,
-        task_function: TaskFunction,
-        config: DictConfig,
+            self,
+            *,
+            hydra_context: HydraContext,
+            task_function: TaskFunction,
+            config: DictConfig,
     ) -> None:
         self.job_idx = 0
         self.config = config
@@ -218,10 +192,10 @@ class CustomOptunaSweeper(Sweeper):
         return [self.direction.name]
 
     def _configure_trials(
-        self,
-        trials: List[Trial],
-        search_space_distributions: Dict[str, BaseDistribution],
-        fixed_params: Dict[str, Any],
+            self,
+            trials: List[Trial],
+            search_space_distributions: Dict[str, BaseDistribution],
+            fixed_params: Dict[str, Any],
     ) -> Sequence[Sequence[str]]:
         overrides = []
         for trial in trials:
@@ -253,18 +227,16 @@ class CustomOptunaSweeper(Sweeper):
 
         return [f"{k!s}={v}" for k, v in self.params.items()]
 
-    def _to_grid_sampler_choices(self, distribution: BaseDistribution) -> Any:
+    @staticmethod
+    def _to_grid_sampler_choices(distribution: BaseDistribution) -> Any:
         if isinstance(distribution, CategoricalDistribution):
             return distribution.choices
-        elif isinstance(distribution, IntDistribution):
+        elif isinstance(distribution, (IntDistribution, FloatDistribution)):
             assert (
-                distribution.step is not None
-            ), "`step` of IntUniformDistribution must be a positive integer."
+                    distribution.step is not None
+            ), "`step` of IntDistribution and FloatDistribution must be a positive number."
             n_items = (distribution.high - distribution.low) // distribution.step
             return [distribution.low + i * distribution.step for i in range(n_items)]
-        elif isinstance(distribution, FloatDistribution):
-            n_items = int((distribution.high - distribution.low) // distribution.q)
-            return [distribution.low + i * distribution.q for i in range(n_items)]
         else:
             raise ValueError("GridSampler only supports discrete distributions.")
 
@@ -279,8 +251,8 @@ class CustomOptunaSweeper(Sweeper):
         params_conf.extend(arguments)
 
         is_grid_sampler = (
-            isinstance(self.sampler, functools.partial)
-            and self.sampler.func == optuna.samplers.GridSampler
+                isinstance(self.sampler, functools.partial)
+                and self.sampler.func == optuna.samplers.GridSampler
         )
 
         (
@@ -370,9 +342,9 @@ class CustomOptunaSweeper(Sweeper):
                         study.tell(trial=trial, state=state, values=values)
                     except RuntimeError as e:
                         if (
-                            is_grid_sampler
-                            and "`Study.stop` is supposed to be invoked inside an objective function or a callback."
-                            in str(e)
+                                is_grid_sampler
+                                and "`Study.stop` is supposed to be invoked inside an objective function or a callback."
+                                in str(e)
                         ):
                             pass
                         else:
