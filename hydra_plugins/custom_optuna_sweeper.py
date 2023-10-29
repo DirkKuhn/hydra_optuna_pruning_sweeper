@@ -71,6 +71,7 @@ class CustomOptunaSweeper(Sweeper):
 
         self.search_space_distributions: Optional[Dict[str, BaseDistribution]] = None
         self.fixed_params: Optional[Dict[str, Any]] = None
+        self.manual_values: Optional[Dict[str, Sequence[Any]]] = None
         self.num_directions: int = len(self.direction) \
             if isinstance(self.direction, MutableSequence) else 1
 
@@ -88,6 +89,10 @@ class CustomOptunaSweeper(Sweeper):
         )
         self.sweep_dir = config.hydra.sweep.dir
 
+        # Setup optuna logging
+        optuna.logging.enable_propagation()       # Propagate logs to the root logger
+        optuna.logging.disable_default_handler()  # Stop showing logs in sys.stderr
+
     def sweep(self, arguments: List[str]) -> None:
         assert self.config is not None
         assert self.launcher is not None
@@ -102,6 +107,7 @@ class CustomOptunaSweeper(Sweeper):
         (
             self.search_space_distributions,
             self.fixed_params,
+            self.manual_values
         ) = create_params_from_overrides(params_conf)
 
         is_grid_sampler = (
@@ -119,7 +125,7 @@ class CustomOptunaSweeper(Sweeper):
         directions = self._get_directions()
 
         if self.n_jobs == 1:
-            study = self._create_study(directions)
+            study = self._setup_study(directions)
             study.optimize(func=self._run_trial, n_trials=self.n_trials)
             self._serialize_results(study, len(directions))
 
@@ -129,7 +135,7 @@ class CustomOptunaSweeper(Sweeper):
             with Client(n_workers=self.n_jobs) as client:
                 print(f"Dask dashboard is available at {client.dashboard_link}")
                 self.storage = DaskStorage(storage=self.storage, client=client)
-                study = self._create_study(directions)
+                study = self._setup_study(directions)
                 futures = [
                     client.submit(
                         study.optimize,
@@ -140,20 +146,6 @@ class CustomOptunaSweeper(Sweeper):
                 ]
                 wait(futures)
                 self._serialize_results(study, len(directions))
-
-    def _create_study(self, directions: List[str]) -> Study:
-        study = optuna.create_study(
-            study_name=self.study_name,
-            storage=self.storage,
-            sampler=self.sampler,
-            directions=directions,
-            load_if_exists=True,
-        )
-        log.info(f"Study name: {study.study_name}")
-        log.info(f"Storage: {self.storage}")
-        log.info(f"Sampler: {type(self.sampler).__name__}")
-        log.info(f"Directions: {directions}")
-        return study
 
     def _parse_sweeper_params_config(self) -> List[str]:
         if not self.params:
@@ -181,6 +173,30 @@ class CustomOptunaSweeper(Sweeper):
         elif isinstance(self.direction, str):
             return [self.direction]
         return [self.direction.name]
+
+    def _setup_study(self, directions: List[str]) -> Study:
+        study = optuna.create_study(
+            study_name=self.study_name,
+            storage=self.storage,
+            sampler=self.sampler,
+            directions=directions,
+            load_if_exists=True,
+        )
+        self._enqueue_manual_values(study)
+        log.info(f"Study name: {study.study_name}")
+        log.info(f"Storage: {self.storage}")
+        log.info(f"Sampler: {type(self.sampler).__name__}")
+        log.info(f"Directions: {directions}")
+        return study
+
+    def _enqueue_manual_values(self, study: Study) -> None:
+        num_manual_values = max(len(s) for s in self.manual_values.values())
+        for i in range(num_manual_values):
+            params = dict()
+            for n, mv in self.manual_values.items():
+                if i < len(mv):
+                    params[n] = mv[i]
+            study.enqueue_trial(params, skip_if_exists=True)
 
     def _run_trial(self, trial: Trial) -> float | Sequence[float]:
         # Share trial with task_function
@@ -264,20 +280,22 @@ class CustomOptunaSweeper(Sweeper):
 
 def create_params_from_overrides(
         arguments: List[str],
-) -> Tuple[Dict[str, BaseDistribution], Dict[str, Any]]:
+) -> Tuple[Dict[str, BaseDistribution], Dict[str, Any], Dict[str, Sequence[Any]]]:
     parser = OverridesParser.create()
     parsed = parser.parse_overrides(arguments)
     search_space_distributions = dict()
     fixed_params = dict()
+    manual_values = dict()
 
     for override in parsed:
         param_name = override.get_key_element()
         value = create_optuna_distribution_from_override(override)
         if isinstance(value, BaseDistribution):
             search_space_distributions[param_name] = value
+            manual_values[param_name] = _extract_manual_values_from_tags(override)
         else:
             fixed_params[param_name] = value
-    return search_space_distributions, fixed_params
+    return search_space_distributions, fixed_params, manual_values
 
 
 def create_optuna_distribution_from_override(override: Override) -> Any:
@@ -328,6 +346,28 @@ def create_optuna_distribution_from_override(override: Override) -> Any:
             return FloatDistribution(value.start, value.end)
 
     raise NotImplementedError(f"{override} is not supported by Optuna sweeper.")
+
+
+def _extract_manual_values_from_tags(override: Override) -> Sequence[Any]:
+    assert override.is_sweep_override()
+    manual_values = [t.split(":", maxsplit=1) for t in override.value().tags if t != "log"]
+    manual_values = [(int(pos), val) for pos, val in manual_values]
+    assert (
+        set(range(len(manual_values))) == set(pos for pos, _ in manual_values)
+    ), (f"Expected manual values for {override.get_key_element()} to be numbered from 0 "
+        f"to {len(manual_values)-1} but got numbers {set(pos for pos, _ in manual_values)}.")
+
+    def extract_value(val: str) -> Any:
+        from ast import literal_eval
+        try:
+            mv = literal_eval(val)
+        except ValueError:
+            mv = val
+        return mv
+
+    from operator import itemgetter
+    manual_values = [extract_value(val) for _, val in sorted(manual_values, key=itemgetter(0))]
+    return manual_values
 
 
 def _to_grid_sampler_choices(distribution: BaseDistribution) -> Any:

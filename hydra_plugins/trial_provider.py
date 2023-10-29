@@ -1,3 +1,4 @@
+from typing import Optional
 from optuna import Trial
 
-trial: None | Trial = None
+trial: Optional[Trial] = None
