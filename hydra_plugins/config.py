@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, auto
 from typing import Any, Dict, List, Optional
 
 from hydra.core.config_store import ConfigStore
@@ -8,8 +8,8 @@ from omegaconf import MISSING
 
 
 class Direction(Enum):
-    minimize = 1
-    maximize = 2
+    minimize = auto()
+    maximize = auto()
 
 
 @dataclass
@@ -151,6 +151,13 @@ class OptunaSweeperConf:
     # a callable with signature Callable[[DictConfig, optuna.trial.Trial], None].
     # https://optuna.readthedocs.io/en/stable/tutorial/10_key_features/002_configurations.html
     custom_search_space: Optional[str] = None
+
+    pruner: Any = None
+    timeout: Optional[float] = None
+    catch: Optional[Any] = None
+    callbacks: Optional[List[Any]] = None
+    gc_after_trial: bool = False
+    show_progress_bar: bool = False
 
 
 ConfigStore.instance().store(

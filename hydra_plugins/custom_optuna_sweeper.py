@@ -10,6 +10,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    Iterable
 )
 
 import optuna
@@ -34,11 +35,14 @@ from optuna.distributions import (
     IntDistribution,
     FloatDistribution
 )
-from optuna.trial import Trial
+from optuna.samplers import BaseSampler
+from optuna.pruners import BasePruner
+from optuna.trial import Trial, FrozenTrial
 from optuna.study import MaxTrialsCallback
 from optuna.integration import DaskStorage
+from dask.distributed import Cluster, Client, wait
 
-from .config import SamplerConfig, Direction
+from .config import Direction
 import hydra_plugins.trial_provider
 
 log = logging.getLogger(__name__)
@@ -47,7 +51,7 @@ log = logging.getLogger(__name__)
 class CustomOptunaSweeper(Sweeper):
     def __init__(
             self,
-            sampler: SamplerConfig,
+            sampler: Optional[BaseSampler],
             direction: Any,
             storage: Optional[Any],
             study_name: Optional[str],
@@ -55,6 +59,13 @@ class CustomOptunaSweeper(Sweeper):
             n_jobs: int,
             custom_search_space: Optional[str],
             params: Optional[DictConfig],
+
+            pruner: Optional[BasePruner] = None,
+            timeout: Optional[float] = None,
+            catch: Optional[Iterable[type[Exception]] | type[Exception]] = None,
+            callbacks: Optional[list[Callable[[Study, FrozenTrial], None]]] = None,
+            gc_after_trial: bool = False,
+            show_progress_bar: bool = False
     ) -> None:
         self.sampler = sampler
         self.direction = direction
@@ -68,6 +79,13 @@ class CustomOptunaSweeper(Sweeper):
         if custom_search_space:
             self.custom_search_space_extender = get_method(custom_search_space)
         self.params = params
+
+        self.pruner = pruner
+        self.timeout = timeout
+        self.catch = () if catch is not None else catch
+        self.callbacks = callbacks
+        self.gc_after_trial = gc_after_trial
+        self.show_progress_bar = show_progress_bar
 
         self.search_space_distributions: Optional[Dict[str, BaseDistribution]] = None
         self.fixed_params: Optional[Dict[str, Any]] = None
@@ -126,12 +144,18 @@ class CustomOptunaSweeper(Sweeper):
 
         if self.n_jobs == 1:
             study = self._setup_study(directions)
-            study.optimize(func=self._run_trial, n_trials=self.n_trials)
+            study.optimize(
+                func=self._run_trial,
+                n_trials=self.n_trials,
+                timeout=self.timeout,
+                catch=self.catch,
+                callbacks=self.callbacks,
+                gc_after_trial=self.gc_after_trial,
+                show_progress_bar=self.show_progress_bar
+            )
             self._serialize_results(study, len(directions))
 
         else:
-            from dask.distributed import Client, wait
-
             with Client(n_workers=self.n_jobs) as client:
                 print(f"Dask dashboard is available at {client.dashboard_link}")
                 self.storage = DaskStorage(storage=self.storage, client=client)
@@ -140,7 +164,15 @@ class CustomOptunaSweeper(Sweeper):
                     client.submit(
                         study.optimize,
                         self._run_trial,
-                        callbacks=[MaxTrialsCallback(n_trials=self.n_trials, states=None)],
+                        n_trials=self.n_trials,
+                        timeout=self.timeout,
+                        catch=self.catch,
+                        callbacks=[
+                            MaxTrialsCallback(n_trials=self.n_trials, states=None),
+                            *self.callbacks
+                        ],
+                        gc_after_trial=self.gc_after_trial,
+                        show_progress_bar=self.show_progress_bar,
                         pure=False
                     ) for _ in range(self.n_jobs)
                 ]
@@ -176,9 +208,10 @@ class CustomOptunaSweeper(Sweeper):
 
     def _setup_study(self, directions: List[str]) -> Study:
         study = optuna.create_study(
-            study_name=self.study_name,
             storage=self.storage,
             sampler=self.sampler,
+            pruner=self.pruner,
+            study_name=self.study_name,
             directions=directions,
             load_if_exists=True,
         )
