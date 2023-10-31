@@ -237,7 +237,8 @@ class OptunaPruningSweeper(Sweeper):
         self._enqueue_manual_values(study)
         log.info(f"Study name: {study.study_name}")
         log.info(f"Storage: {self.storage}")
-        log.info(f"Sampler: {type(self.sampler).__name__}")
+        log.info(f"Sampler: {type(study.sampler).__name__}")
+        log.info(f"Pruner: {type(study.pruner).__name__}")
         log.info(f"Directions: {self.directions}")
         return study
 
