@@ -12,7 +12,8 @@ from typing import (
     Sequence,
     Tuple,
     Iterable,
-    Union
+    Union,
+    Literal
 )
 
 import optuna
@@ -50,12 +51,18 @@ import hydra_plugins.trial_provider
 log = logging.getLogger(__name__)
 
 
+direction_type = Literal["minimize"] | Literal["maximize"] | StudyDirection
+
+
 class OptunaPruningSweeper(Sweeper):
     def __init__(
             self,
             sampler: Optional[BaseSampler] = None,
             pruner: Optional[BasePruner] = None,
-            direction: Union[str, StudyDirection, List[Union[str, StudyDirection]]] = StudyDirection.MINIMIZE,
+            direction: Union[
+                Literal["minimize"], Literal["maximize"], StudyDirection,
+                List[Union[Literal["minimize"], Literal["maximize"], StudyDirection]]
+            ] = StudyDirection.MINIMIZE,
             storage: Optional[Union[str, BaseStorage]] = None,
             study_name: Optional[str] = None,
             n_trials: int = 20,
@@ -71,8 +78,13 @@ class OptunaPruningSweeper(Sweeper):
 
             dask_client: Optional[Callable[[], Client]] = None
     ) -> None:
+        if n_jobs == 1 and dask_client:
+            warnings.warn(
+                "As ``n_jobs=1`` dask is not used. Specify ``n_jobs>1`` to use dask"
+            )
+
         self.sampler = sampler
-        self.direction = direction
+        self.directions = direction if isinstance(direction, MutableSequence) else [direction]
         self.storage = storage
         self.study_name = study_name
         self.n_trials = n_trials
@@ -91,17 +103,11 @@ class OptunaPruningSweeper(Sweeper):
         self.gc_after_trial = gc_after_trial
         self.show_progress_bar = show_progress_bar
 
-        if n_jobs == 1 and dask_client:
-            warnings.warn(
-                "As ``n_jobs=1`` dask is not used. Specify ``n_jobs>1`` to use dask"
-            )
         self.dask_client = dask_client
 
         self.search_space_distributions: Optional[Dict[str, BaseDistribution]] = None
         self.fixed_params: Optional[Dict[str, Any]] = None
         self.manual_values: Optional[Dict[str, Sequence[Any]]] = None
-        self.num_directions: int = len(self.direction) \
-            if isinstance(self.direction, MutableSequence) else 1
 
     def setup(
             self,
@@ -150,10 +156,8 @@ class OptunaPruningSweeper(Sweeper):
             if param_name in self.search_space_distributions:
                 del self.search_space_distributions[param_name]
 
-        directions = self._get_directions()
-
         if self.n_jobs == 1:
-            study = self._setup_study(directions)
+            study = self._setup_study()
             study.optimize(
                 func=self._run_trial,
                 n_trials=self.n_trials,
@@ -163,7 +167,7 @@ class OptunaPruningSweeper(Sweeper):
                 gc_after_trial=self.gc_after_trial,
                 show_progress_bar=self.show_progress_bar
             )
-            self._serialize_results(study, len(directions))
+            self._serialize_results(study)
 
         else:
             with (
@@ -171,7 +175,7 @@ class OptunaPruningSweeper(Sweeper):
             ) as client:
                 print(f"Dask dashboard is available at {client.dashboard_link}")
                 self.storage = DaskStorage(storage=self.storage, client=client)
-                study = self._setup_study(directions)
+                study = self._setup_study()
                 futures = [
                     client.submit(
                         study.optimize,
@@ -189,7 +193,7 @@ class OptunaPruningSweeper(Sweeper):
                     ) for _ in range(self.n_jobs)
                 ]
                 wait(futures)
-                self._serialize_results(study, len(directions))
+                self._serialize_results(study)
 
     def _parse_sweeper_params_config(self) -> List[str]:
         if not self.params:
@@ -211,26 +215,20 @@ class OptunaPruningSweeper(Sweeper):
             f"Updating num of trials to {self.n_trials} due to using GridSampler."
         )
 
-    def _get_directions(self) -> List[Union[str, StudyDirection]]:
-        if isinstance(self.direction, MutableSequence):
-            return self.direction
-        else:
-            return [self.direction]
-
-    def _setup_study(self, directions: List[Union[str, StudyDirection]]) -> Study:
+    def _setup_study(self) -> Study:
         study = optuna.create_study(
             storage=self.storage,
             sampler=self.sampler,
             pruner=self.pruner,
             study_name=self.study_name,
-            directions=directions,
+            directions=self.directions,
             load_if_exists=True,
         )
         self._enqueue_manual_values(study)
         log.info(f"Study name: {study.study_name}")
         log.info(f"Storage: {self.storage}")
         log.info(f"Sampler: {type(self.sampler).__name__}")
-        log.info(f"Directions: {directions}")
+        log.info(f"Directions: {self.directions}")
         return study
 
     def _enqueue_manual_values(self, study: Study) -> None:
@@ -249,7 +247,8 @@ class OptunaPruningSweeper(Sweeper):
         overrides = self._configure_trial(trial)
         [ret] = self.launcher.launch([overrides], initial_job_idx=trial.number)
 
-        if self.num_directions == 1:
+        num_directions = len(self.directions)
+        if num_directions == 1:
             try:
                 values = [float(ret.return_value)]
             except (ValueError, TypeError):
@@ -264,10 +263,10 @@ class OptunaPruningSweeper(Sweeper):
                     "Return value must be a list or tuple of float-castable values."
                     f" Got '{ret.return_value}'."
                 ).with_traceback(sys.exc_info()[2])
-            if len(values) != self.num_directions:
+            if len(values) != num_directions:
                 raise ValueError(
                     "The number of the values and the number of the objectives are"
-                    f" mismatched. Expect {self.num_directions}, but actually {len(values)}."
+                    f" mismatched. Expect {num_directions}, but actually {len(values)}."
                 )
         return values
 
@@ -293,9 +292,9 @@ class OptunaPruningSweeper(Sweeper):
 
         return tuple(f"{name}={val}" for name, val in params.items())
 
-    def _serialize_results(self, study: Study, num_directions: int) -> None:
+    def _serialize_results(self, study: Study) -> None:
         results_to_serialize: Dict[str, Any]
-        if num_directions < 2:
+        if len(self.directions) < 2:
             best_trial = study.best_trial
             results_to_serialize = {
                 "name": "optuna",
