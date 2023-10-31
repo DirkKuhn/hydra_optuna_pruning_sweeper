@@ -1,6 +1,7 @@
 import functools
 import logging
 import sys
+import warnings
 from typing import (
     Any,
     Callable,
@@ -10,7 +11,8 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
-    Iterable
+    Iterable,
+    Union
 )
 
 import optuna
@@ -37,35 +39,37 @@ from optuna.distributions import (
 )
 from optuna.samplers import BaseSampler
 from optuna.pruners import BasePruner
+from optuna.storages import BaseStorage
 from optuna.trial import Trial, FrozenTrial
-from optuna.study import MaxTrialsCallback
+from optuna.study import MaxTrialsCallback, StudyDirection
 from optuna.integration import DaskStorage
-from dask.distributed import Cluster, Client, wait
+from dask.distributed import Client, wait
 
-from .config import Direction
 import hydra_plugins.trial_provider
 
 log = logging.getLogger(__name__)
 
 
-class CustomOptunaSweeper(Sweeper):
+class OptunaPruningSweeper(Sweeper):
     def __init__(
             self,
-            sampler: Optional[BaseSampler],
-            direction: Any,
-            storage: Optional[Any],
-            study_name: Optional[str],
-            n_trials: int,
-            n_jobs: int,
-            custom_search_space: Optional[str],
-            params: Optional[DictConfig],
-
+            sampler: Optional[BaseSampler] = None,
             pruner: Optional[BasePruner] = None,
+            direction: Union[str, StudyDirection, List[Union[str, StudyDirection]]] = StudyDirection.MINIMIZE,
+            storage: Optional[Union[str, BaseStorage]] = None,
+            study_name: Optional[str] = None,
+            n_trials: int = 20,
+            n_jobs: int = 1,
+            custom_search_space: Optional[str] = None,
+            params: Optional[DictConfig] = None,
+
             timeout: Optional[float] = None,
             catch: Optional[Iterable[type[Exception]] | type[Exception]] = None,
             callbacks: Optional[list[Callable[[Study, FrozenTrial], None]]] = None,
             gc_after_trial: bool = False,
-            show_progress_bar: bool = False
+            show_progress_bar: bool = False,
+
+            dask_client: Optional[Callable[[], Client]] = None
     ) -> None:
         self.sampler = sampler
         self.direction = direction
@@ -83,9 +87,15 @@ class CustomOptunaSweeper(Sweeper):
         self.pruner = pruner
         self.timeout = timeout
         self.catch = () if catch is not None else catch
-        self.callbacks = callbacks
+        self.callbacks = callbacks if callbacks else []
         self.gc_after_trial = gc_after_trial
         self.show_progress_bar = show_progress_bar
+
+        if n_jobs == 1 and dask_client:
+            warnings.warn(
+                "As ``n_jobs=1`` dask is not used. Specify ``n_jobs>1`` to use dask"
+            )
+        self.dask_client = dask_client
 
         self.search_space_distributions: Optional[Dict[str, BaseDistribution]] = None
         self.fixed_params: Optional[Dict[str, Any]] = None
@@ -156,7 +166,9 @@ class CustomOptunaSweeper(Sweeper):
             self._serialize_results(study, len(directions))
 
         else:
-            with Client(n_workers=self.n_jobs) as client:
+            with (
+                self.dask_client() if self.dask_client else Client(n_workers=self.n_jobs)
+            ) as client:
                 print(f"Dask dashboard is available at {client.dashboard_link}")
                 self.storage = DaskStorage(storage=self.storage, client=client)
                 study = self._setup_study(directions)
@@ -199,14 +211,13 @@ class CustomOptunaSweeper(Sweeper):
             f"Updating num of trials to {self.n_trials} due to using GridSampler."
         )
 
-    def _get_directions(self) -> List[str]:
+    def _get_directions(self) -> List[Union[str, StudyDirection]]:
         if isinstance(self.direction, MutableSequence):
-            return [d.name if isinstance(d, Direction) else d for d in self.direction]
-        elif isinstance(self.direction, str):
+            return self.direction
+        else:
             return [self.direction]
-        return [self.direction.name]
 
-    def _setup_study(self, directions: List[str]) -> Study:
+    def _setup_study(self, directions: List[Union[str, StudyDirection]]) -> Study:
         study = optuna.create_study(
             storage=self.storage,
             sampler=self.sampler,

@@ -7,7 +7,6 @@ from optuna.trial import Trial
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def multi_dimensional_sphere(cfg: DictConfig) -> float:
     from time import sleep
-    sleep(0.2)
 
     w: float = cfg.w
     x: float = cfg.x

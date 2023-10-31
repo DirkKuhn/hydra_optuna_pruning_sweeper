@@ -1,210 +1,73 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Any, Dict, List, Optional
+import inspect
 
-from hydra.core.config_store import ConfigStore
-from omegaconf import MISSING
+from hydra_zen import store
+from optuna import samplers, pruners
+from distributed import Client, LocalCluster, SpecCluster
 
-
-class Direction(Enum):
-    minimize = auto()
-    maximize = auto()
+from .custom_optuna_sweeper import OptunaPruningSweeper
 
 
-@dataclass
-class SamplerConfig:
-    _target_: str = MISSING
-
-
-@dataclass
-class GridSamplerConfig(SamplerConfig):
-    """
-    https://optuna.readthedocs.io/en/stable/reference/generated/optuna.samplers.GridSampler.html
-    """
-
-    _target_: str = "optuna.samplers.GridSampler"
-    # search_space will be populated at run time based on hydra.sweeper.params
-    _partial_: bool = True
-
-
-@dataclass
-class TPESamplerConfig(SamplerConfig):
-    """
-    https://optuna.readthedocs.io/en/stable/reference/generated/optuna.samplers.TPESampler.html
-    """
-
-    _target_: str = "optuna.samplers.TPESampler"
-    seed: Optional[int] = None
-
-    consider_prior: bool = True
-    prior_weight: float = 1.0
-    consider_magic_clip: bool = True
-    consider_endpoints: bool = False
-    n_startup_trials: int = 10
-    n_ei_candidates: int = 24
-    multivariate: bool = False
-    group: bool = False
-    warn_independent_sampling: bool = True
-    constant_liar: bool = False
-
-
-@dataclass
-class RandomSamplerConfig(SamplerConfig):
-    """
-    https://optuna.readthedocs.io/en/stable/reference/generated/optuna.samplers.RandomSampler.html
-    """
-
-    _target_: str = "optuna.samplers.RandomSampler"
-    seed: Optional[int] = None
-
-
-@dataclass
-class CmaEsSamplerConfig(SamplerConfig):
-    """
-    https://optuna.readthedocs.io/en/stable/reference/generated/optuna.samplers.CmaEsSampler.html
-    """
-
-    _target_: str = "optuna.samplers.CmaEsSampler"
-    seed: Optional[int] = None
-
-    x0: Optional[Dict[str, Any]] = None
-    sigma0: Optional[float] = None
-    independent_sampler: Optional[Any] = None
-    warn_independent_sampling: bool = True
-    consider_pruned_trials: bool = False
-    restart_strategy: Optional[Any] = None
-    inc_popsize: int = 2
-    use_separable_cma: bool = False
-    source_trials: Optional[Any] = None
-
-
-@dataclass
-class NSGAIISamplerConfig(SamplerConfig):
-    """
-    https://optuna.readthedocs.io/en/stable/reference/generated/optuna.samplers.NSGAIISampler.html
-    """
-
-    _target_: str = "optuna.samplers.NSGAIISampler"
-    seed: Optional[int] = None
-
-    population_size: int = 50
-    mutation_prob: Optional[float] = None
-    crossover_prob: float = 0.9
-    swapping_prob: float = 0.5
-    constraints_func: Optional[Any] = None
-
-
-@dataclass
-class MOTPESamplerConfig(SamplerConfig):
-    """
-    https://optuna.readthedocs.io/en/stable/reference/generated/optuna.samplers.MOTPESampler.html
-    """
-
-    _target_: str = "optuna.samplers.MOTPESampler"
-    seed: Optional[int] = None
-
-    consider_prior: bool = True
-    prior_weight: float = 1.0
-    consider_magic_clip: bool = True
-    consider_endpoints: bool = False
-    n_startup_trials: int = 10
-    n_ehvi_candidates: int = 24
-
-
-defaults = [{"sampler": "tpe"}]
-
-
-@dataclass
-class OptunaSweeperConf:
-    _target_: str = "hydra_plugins.custom_optuna_sweeper.CustomOptunaSweeper"
-    defaults: List[Any] = field(default_factory=lambda: defaults)
-
-    # Sampling algorithm
-    # Please refer to the reference for further details
-    # https://optuna.readthedocs.io/en/stable/reference/samplers.html
-    sampler: SamplerConfig = MISSING
-
-    # Direction of optimization
-    # Union[Direction, List[Direction]]
-    direction: Any = Direction.minimize
-
-    # Storage URL to persist optimization results
-    # For example, you can use SQLite if you set 'sqlite:///example.db'
-    # Please refer to the reference for further details
-    # https://optuna.readthedocs.io/en/stable/reference/storages.html
-    storage: Optional[Any] = None
-
-    # Name of study to persist optimization results
-    study_name: Optional[str] = None
-
-    # Total number of function evaluations
-    n_trials: int = 20
-
-    # Number of parallel workers
-    n_jobs: int = 2
-
-    params: Optional[Dict[str, str]] = None
-
-    # Allow custom trial configuration via Python methods.
-    # If given, `custom_search_space` should be an instantiate-style dotpath targeting
-    # a callable with signature Callable[[DictConfig, optuna.trial.Trial], None].
-    # https://optuna.readthedocs.io/en/stable/tutorial/10_key_features/002_configurations.html
-    custom_search_space: Optional[str] = None
-
-    pruner: Any = None
-    timeout: Optional[float] = None
-    catch: Optional[Any] = None
-    callbacks: Optional[List[Any]] = None
-    gc_after_trial: bool = False
-    show_progress_bar: bool = False
-
-
-ConfigStore.instance().store(
+store(
+    OptunaPruningSweeper,
     group="hydra/sweeper",
-    name="optuna",
-    node=OptunaSweeperConf,
-    provider="optuna_sweeper",
+    provider="optuna_pruning_sweeper"
 )
 
-ConfigStore.instance().store(
+
+optuna_samplers = [
+    cls for name, cls in inspect.getmembers(samplers)
+    if inspect.isclass(cls) and "Sampler" in name and "Base" not in name and name != "GridSampler"
+]
+
+for sampler_cls in optuna_samplers:
+    store(
+        sampler_cls,
+        group="hydra/sweeper/sampler",
+        provider="optuna_pruning_sweeper"
+    )
+
+
+store(
+    samplers.GridSampler,
+    # search_space will be populated at run time based on hydra.sweeper.params
+    zen_partial=True,
     group="hydra/sweeper/sampler",
-    name="tpe",
-    node=TPESamplerConfig,
-    provider="optuna_sweeper",
+    provider="optuna_pruning_sweeper"
 )
 
-ConfigStore.instance().store(
-    group="hydra/sweeper/sampler",
-    name="random",
-    node=RandomSamplerConfig,
-    provider="optuna_sweeper",
+
+optuna_pruners = [
+    cls for name, cls in inspect.getmembers(pruners)
+    if inspect.isclass(cls) and "Pruner" in name and "Base" not in name
+]
+
+for pruner_cls in optuna_pruners:
+    store(
+        pruner_cls,
+        group="hydra/sweeper/pruner",
+        provider="optuna_pruning_sweeper"
+    )
+
+
+store(
+    Client,
+    group="hydra/sweeper/dask_client",
+    # Partial as this should be instantiated in with statement.
+    zen_partial=True,
+    provider="optuna_pruning_sweeper"
 )
 
-ConfigStore.instance().store(
-    group="hydra/sweeper/sampler",
-    name="cmaes",
-    node=CmaEsSamplerConfig,
-    provider="optuna_sweeper",
+store(
+    LocalCluster,
+    group="hydra/sweeper/dask_client/address",
+    provider="optuna_pruning_sweeper"
 )
 
-ConfigStore.instance().store(
-    group="hydra/sweeper/sampler",
-    name="nsgaii",
-    node=NSGAIISamplerConfig,
-    provider="optuna_sweeper",
+store(
+    SpecCluster,
+    group="hydra/sweeper/dask_client/address",
+    provider="optuna_pruning_sweeper"
 )
 
-ConfigStore.instance().store(
-    group="hydra/sweeper/sampler",
-    name="motpe",
-    node=MOTPESamplerConfig,
-    provider="optuna_sweeper",
-)
 
-ConfigStore.instance().store(
-    group="hydra/sweeper/sampler",
-    name="grid",
-    node=GridSamplerConfig,
-    provider="optuna_sweeper",
-)
+store.add_to_hydra_store()
