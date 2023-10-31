@@ -167,43 +167,9 @@ class OptunaPruningSweeper(Sweeper):
                 del self.search_space_distributions[param_name]
 
         if self.n_jobs == 1:
-            study = self._setup_study()
-            study.optimize(
-                func=self._run_trial,
-                n_trials=self.n_trials,
-                timeout=self.timeout,
-                catch=self.catch,
-                callbacks=self.callbacks,
-                gc_after_trial=self.gc_after_trial,
-                show_progress_bar=self.show_progress_bar
-            )
-            self._serialize_results(study)
-
+            self._run_sequential()
         else:
-            with (
-                self.dask_client() if self.dask_client else Client(n_workers=self.n_jobs)
-            ) as client:
-                print(f"Dask dashboard is available at {client.dashboard_link}")
-                self.storage = DaskStorage(storage=self.storage, client=client)
-                study = self._setup_study()
-                futures = [
-                    client.submit(
-                        study.optimize,
-                        self._run_trial,
-                        n_trials=self.n_trials,
-                        timeout=self.timeout,
-                        catch=self.catch,
-                        callbacks=[
-                            MaxTrialsCallback(n_trials=self.n_trials, states=None),
-                            *self.callbacks
-                        ],
-                        gc_after_trial=self.gc_after_trial,
-                        show_progress_bar=self.show_progress_bar,
-                        pure=False
-                    ) for _ in range(self.n_jobs)
-                ]
-                wait(futures)
-                self._serialize_results(study)
+            self._run_parallel()
 
     def _parse_sweeper_params_config(self) -> List[str]:
         if not self.params:
@@ -224,6 +190,45 @@ class OptunaPruningSweeper(Sweeper):
         log.info(
             f"Updating num of trials to {self.n_trials} due to using GridSampler."
         )
+
+    def _run_sequential(self) -> None:
+        study = self._setup_study()
+        study.optimize(
+            func=self._run_trial,
+            n_trials=self.n_trials,
+            timeout=self.timeout,
+            catch=self.catch,
+            callbacks=self.callbacks,
+            gc_after_trial=self.gc_after_trial,
+            show_progress_bar=self.show_progress_bar
+        )
+        self._serialize_results(study)
+
+    def _run_parallel(self) -> None:
+        with (
+                self.dask_client() if self.dask_client else Client(n_workers=self.n_jobs)
+        ) as client:
+            print(f"Dask dashboard is available at {client.dashboard_link}")
+            self.storage = DaskStorage(storage=self.storage, client=client)
+            study = self._setup_study()
+            futures = [
+                client.submit(
+                    study.optimize,
+                    self._run_trial,
+                    n_trials=self.n_trials,
+                    timeout=self.timeout,
+                    catch=self.catch,
+                    callbacks=[
+                        MaxTrialsCallback(n_trials=self.n_trials, states=None),
+                        *self.callbacks
+                    ],
+                    gc_after_trial=self.gc_after_trial,
+                    show_progress_bar=self.show_progress_bar,
+                    pure=False
+                ) for _ in range(self.n_jobs)
+            ]
+            wait(futures)
+            self._serialize_results(study)
 
     def _setup_study(self) -> Study:
         study = optuna.create_study(
