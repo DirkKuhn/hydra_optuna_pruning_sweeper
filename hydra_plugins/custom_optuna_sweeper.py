@@ -13,7 +13,8 @@ from typing import (
     Tuple,
     Iterable,
     Union,
-    Literal
+    Literal,
+    Mapping
 )
 
 import optuna
@@ -26,6 +27,7 @@ from hydra.core.override_parser.types import (
     Transformer,
 )
 from hydra.core.plugins import Plugins
+from hydra._internal.core_plugins.basic_launcher import BasicLauncher
 from hydra.plugins.sweeper import Sweeper
 from hydra.types import HydraContext, TaskFunction
 from hydra.utils import get_method
@@ -38,7 +40,7 @@ from optuna.distributions import (
     IntDistribution,
     FloatDistribution
 )
-from optuna.samplers import BaseSampler
+from optuna.samplers import BaseSampler, GridSampler
 from optuna.pruners import BasePruner
 from optuna.storages import BaseStorage
 from optuna.trial import Trial, FrozenTrial
@@ -51,13 +53,13 @@ import hydra_plugins.trial_provider
 log = logging.getLogger(__name__)
 
 
-direction_type = Literal["minimize"] | Literal["maximize"] | StudyDirection
-
-
 class OptunaPruningSweeper(Sweeper):
     def __init__(
             self,
-            sampler: Optional[BaseSampler] = None,
+            sampler: Optional[Union[
+                BaseSampler,
+                Callable[[Mapping[str, Sequence[optuna.samplers._grid.GridValueType]]], GridSampler]
+            ]] = None,
             pruner: Optional[BasePruner] = None,
             direction: Union[
                 Literal["minimize"], Literal["maximize"], StudyDirection,
@@ -65,7 +67,7 @@ class OptunaPruningSweeper(Sweeper):
             ] = StudyDirection.MINIMIZE,
             storage: Optional[Union[str, BaseStorage]] = None,
             study_name: Optional[str] = None,
-            n_trials: int = 20,
+            n_trials: Optional[int] = None,
             n_jobs: int = 1,
             custom_search_space: Optional[str] = None,
             params: Optional[DictConfig] = None,
@@ -105,6 +107,7 @@ class OptunaPruningSweeper(Sweeper):
 
         self.dask_client = dask_client
 
+        self.sweep_dir: Optional[str] = None
         self.search_space_distributions: Optional[Dict[str, BaseDistribution]] = None
         self.fixed_params: Optional[Dict[str, Any]] = None
         self.manual_values: Optional[Dict[str, Sequence[Any]]] = None
@@ -122,6 +125,13 @@ class OptunaPruningSweeper(Sweeper):
             config=config, hydra_context=hydra_context, task_function=task_function
         )
         self.sweep_dir = config.hydra.sweep.dir
+
+        assert isinstance(self.launcher, BasicLauncher), (
+            f"This plugin assumes that the ``BasicLauncher`` (the default launcher) is used, "
+            f"but got {self.launcher}. If you want to parallelize the hyperparameter search "
+            f"simply set ``n_jobs>1``, then dask is used automatically. If you still need "
+            f"another launcher, use the original optuna sweeper."
+        )
 
         # Setup optuna logging
         optuna.logging.enable_propagation()       # Propagate logs to the root logger
