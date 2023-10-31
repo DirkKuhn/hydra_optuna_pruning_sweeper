@@ -148,11 +148,7 @@ class OptunaPruningSweeper(Sweeper):
         params_conf = self._parse_sweeper_params_config()
         params_conf.extend(arguments)
 
-        (
-            self.search_space_distributions,
-            self.fixed_params,
-            self.manual_values
-        ) = create_params_from_overrides(params_conf)
+        self._create_params_from_overrides(params_conf)
 
         is_grid_sampler = (
             isinstance(self.sampler, functools.partial)
@@ -176,6 +172,22 @@ class OptunaPruningSweeper(Sweeper):
             return []
 
         return [f"{k!s}={v}" for k, v in self.params.items()]
+
+    def _create_params_from_overrides(self, arguments: List[str]) -> None:
+        parser = OverridesParser.create()
+        parsed = parser.parse_overrides(arguments)
+        self.search_space_distributions = dict()
+        self.fixed_params = dict()
+        self.manual_values = dict()
+
+        for override in parsed:
+            param_name = override.get_key_element()
+            value = create_optuna_distribution_from_override(override)
+            if isinstance(value, BaseDistribution):
+                self.search_space_distributions[param_name] = value
+                self.manual_values[param_name] = _extract_manual_values_from_tags(override)
+            else:
+                self.fixed_params[param_name] = value
 
     def _setup_grid_sampler(self):
         search_space_for_grid_sampler = {
@@ -335,26 +347,6 @@ class OptunaPruningSweeper(Sweeper):
             OmegaConf.create(results_to_serialize),
             f"{self.config.hydra.sweep.dir}/optimization_results.yaml",
         )
-
-
-def create_params_from_overrides(
-        arguments: List[str],
-) -> Tuple[Dict[str, BaseDistribution], Dict[str, Any], Dict[str, Sequence[Any]]]:
-    parser = OverridesParser.create()
-    parsed = parser.parse_overrides(arguments)
-    search_space_distributions = dict()
-    fixed_params = dict()
-    manual_values = dict()
-
-    for override in parsed:
-        param_name = override.get_key_element()
-        value = create_optuna_distribution_from_override(override)
-        if isinstance(value, BaseDistribution):
-            search_space_distributions[param_name] = value
-            manual_values[param_name] = _extract_manual_values_from_tags(override)
-        else:
-            fixed_params[param_name] = value
-    return search_space_distributions, fixed_params, manual_values
 
 
 def create_optuna_distribution_from_override(override: Override) -> Any:
