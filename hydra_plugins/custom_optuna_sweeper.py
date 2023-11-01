@@ -10,12 +10,13 @@ from typing import (
     MutableSequence,
     Optional,
     Sequence,
-    Tuple,
     Iterable,
     Union,
     Literal,
-    Mapping
+    Mapping,
+    Type
 )
+from abc import ABC, abstractmethod
 
 import optuna
 from hydra.core.override_parser.overrides_parser import OverridesParser
@@ -30,7 +31,6 @@ from hydra.core.plugins import Plugins
 from hydra._internal.core_plugins.basic_launcher import BasicLauncher
 from hydra.plugins.sweeper import Sweeper
 from hydra.types import HydraContext, TaskFunction
-from hydra.utils import get_method
 from omegaconf import DictConfig, OmegaConf
 from optuna import Study
 from optuna.distributions import (
@@ -53,6 +53,50 @@ import hydra_plugins.trial_provider
 log = logging.getLogger(__name__)
 
 
+class CustomSearchSpace(ABC):
+    @property
+    def manual_values(self) -> Dict[str, Sequence[Any]]:
+        return dict()
+
+    @abstractmethod
+    def suggest(self, cfg: DictConfig, trial: Trial) -> Dict[str, Any]:
+        pass
+
+
+class ListSearchSpace(CustomSearchSpace):
+    def __init__(
+            self,
+            name: str,
+            min_entries: int, max_entries: int,
+            min_value: float, max_value: float,
+            manual_values: Sequence[Any]
+    ):
+        assert min_entries < max_entries, f"``min_entries`` should be lower than ``max_entries``!"
+        assert min_value < max_value, f"``min_value`` should be lower than ``max_value``!"
+        self.name = name
+        self.min_entries = min_entries
+        self.max_entries = max_entries
+        self.min_value = min_value
+        self.max_value = max_value
+        self._manual_values = manual_values
+        self.use_float = isinstance(min_value, float) or isinstance(max_value, float)
+
+    @property
+    def manual_values(self) -> Dict[str, Sequence[Any]]:
+        return {self.name: self._manual_values}
+
+    def suggest(self, cfg: DictConfig, trial: Trial) -> Dict[str, Any]:
+        num_entries = trial.suggest_int(
+            f"{self.name}.num_entries", low=self.min_entries, high=self.max_entries
+        )
+        suggest = trial.suggest_float if self.use_float else trial.suggest_int
+        values = [
+            suggest(name=f"{self.name}.{i}", low=self.min_value, high=self.max_value)
+            for i in range(num_entries)
+        ]
+        return {self.name: values}
+
+
 class OptunaPruningSweeper(Sweeper):
     def __init__(
             self,
@@ -69,15 +113,13 @@ class OptunaPruningSweeper(Sweeper):
             study_name: Optional[str] = None,
             n_trials: Optional[int] = None,
             n_jobs: int = 1,
-            custom_search_space: Optional[str] = None,
             params: Optional[DictConfig] = None,
-
+            custom_search_space: Optional[Union[CustomSearchSpace, List[CustomSearchSpace]]] = None,
             timeout: Optional[float] = None,
-            catch: Optional[Iterable[type[Exception]] | type[Exception]] = None,
-            callbacks: Optional[list[Callable[[Study, FrozenTrial], None]]] = None,
+            catch: Optional[Iterable[Type[Exception]] | Type[Exception]] = None,
+            callbacks: Optional[List[Callable[[Study, FrozenTrial], None]]] = None,
             gc_after_trial: bool = False,
             show_progress_bar: bool = False,
-
             dask_client: Optional[Callable[[], Client]] = None
     ) -> None:
         if n_jobs == 1 and dask_client:
@@ -91,12 +133,13 @@ class OptunaPruningSweeper(Sweeper):
         self.study_name = study_name
         self.n_trials = n_trials
         self.n_jobs = n_jobs
-        self.custom_search_space_extender: Optional[
-            Callable[[DictConfig, Trial], None]
-        ] = None
-        if custom_search_space:
-            self.custom_search_space_extender = get_method(custom_search_space)
         self.params = params
+        if custom_search_space is None:
+            self.custom_search_space = []
+        elif isinstance(custom_search_space, CustomSearchSpace):
+            self.custom_search_space = [custom_search_space]
+        else:
+            self.custom_search_space = custom_search_space
 
         self.pruner = pruner
         self.timeout = timeout
@@ -148,7 +191,7 @@ class OptunaPruningSweeper(Sweeper):
         params_conf = self._parse_sweeper_params_config()
         params_conf.extend(arguments)
 
-        self._create_params_from_overrides(params_conf)
+        self._create_params_and_manual_values(params_conf)
 
         is_grid_sampler = (
             isinstance(self.sampler, functools.partial)
@@ -173,7 +216,7 @@ class OptunaPruningSweeper(Sweeper):
 
         return [f"{k!s}={v}" for k, v in self.params.items()]
 
-    def _create_params_from_overrides(self, arguments: List[str]) -> None:
+    def _create_params_and_manual_values(self, arguments: List[str]) -> None:
         parser = OverridesParser.create()
         parsed = parser.parse_overrides(arguments)
         self.search_space_distributions = dict()
@@ -188,6 +231,18 @@ class OptunaPruningSweeper(Sweeper):
                 self.manual_values[param_name] = _extract_manual_values_from_tags(override)
             else:
                 self.fixed_params[param_name] = value
+
+        overlap = set.intersection(
+            set(self.manual_values.keys()),
+            *[cs.manual_values.keys() for cs in self.custom_search_space]
+        )
+        if len(overlap):
+            raise ValueError(
+                "Overlapping manual values found!"
+                f"Overlapping manual values: {list(overlap)}"
+            )
+        for cs in self.custom_search_space:
+            self.manual_values.update(cs.manual_values)
 
     def _setup_grid_sampler(self):
         search_space_for_grid_sampler = {
@@ -299,23 +354,26 @@ class OptunaPruningSweeper(Sweeper):
         return values
 
     def _configure_trial(self, trial: Trial) -> Sequence[str]:
-        for param_name, distribution in self.search_space_distributions.items():
-            assert type(param_name) is str
-            trial._suggest(param_name, distribution)
-        for param_name, value in self.fixed_params.items():
-            trial.set_user_attr(param_name, value)
+        params = {
+            name: trial._suggest(name, distribution)
+            for name, distribution in self.search_space_distributions.items()
+        }
+        assert self.config is not None
+        custom_params = [cs.suggest(self.config, trial) for cs in self.custom_search_space]
+        for name, value in self.fixed_params.items():
+            trial.set_user_attr(name, value)
 
-        if self.custom_search_space_extender:
-            assert self.config is not None
-            self.custom_search_space_extender(self.config, trial)
-
-        overlap = trial.params.keys() & trial.user_attrs
+        overlap = set.intersection(
+            set(params.keys()), trial.user_attrs, *[d.keys() for d in custom_params]
+        )
         if len(overlap):
             raise ValueError(
                 "Overlapping fixed parameters and search space parameters found!"
                 f"Overlapping parameters: {list(overlap)}"
             )
-        params = dict(trial.params)
+
+        for cp in custom_params:
+            params.update(cp)
         params.update(self.fixed_params)
 
         return tuple(f"{name}={val}" for name, val in params.items())

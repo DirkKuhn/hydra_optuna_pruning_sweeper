@@ -14,6 +14,7 @@ hydra:
       +y: tag(0:3, 1:4, interval(-5, 5))
     # `custom_search_space` should be a dotpath pointing to a
     # callable that provides search-space configuration logic:
-    custom_search_space: objective.configure
+    custom_search_space:
+      _target_: objective.MyCustomSearchSpace
 
 max_z_difference_from_x: 0.5
