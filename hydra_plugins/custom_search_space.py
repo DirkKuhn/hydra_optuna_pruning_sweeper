@@ -10,7 +10,6 @@ from optuna.trial import Trial
 
 
 class CustomSearchSpace(ABC):
-    @property
     def manual_values(self) -> Dict[str, Sequence[Any]]:
         return dict()
 
@@ -37,7 +36,6 @@ class ListSearchSpace(CustomSearchSpace):
         self._manual_values = manual_values
         self.use_float = isinstance(min_value, float) or isinstance(max_value, float)
 
-    @property
     def manual_values(self) -> Dict[str, Sequence[Any]]:
         return {self.name: self._manual_values}
 

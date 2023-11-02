@@ -5,7 +5,7 @@ import hydra
 from omegaconf import DictConfig
 from optuna.trial import Trial
 
-from hydra_plugins.custom_optuna_sweeper import CustomSearchSpace
+from hydra_plugins.optuna_pruning_sweeper import CustomSearchSpace
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
@@ -21,7 +21,6 @@ class MyCustomSearchSpace(CustomSearchSpace):
     z_name = "+z"
     w_name = "+w"
 
-    @property
     def manual_values(self) -> Dict[str, Sequence[Any]]:
         return {self.z_name: [0.5, 1.5], self.w_name: [0, 1]}
 

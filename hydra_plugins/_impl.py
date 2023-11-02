@@ -24,7 +24,7 @@ from hydra.core.override_parser.types import (
     IntervalSweep,
     Override,
     RangeSweep,
-    Transformer,
+    Transformer
 )
 from hydra.core.plugins import Plugins
 from hydra._internal.core_plugins.basic_launcher import BasicLauncher
@@ -47,37 +47,38 @@ from optuna.study import MaxTrialsCallback, StudyDirection
 from optuna.integration import DaskStorage
 from dask.distributed import Client, wait
 
-import hydra_plugins.trial_provider
+from hydra_plugins import trial_provider
 from hydra_plugins.custom_search_space import CustomSearchSpace
+
 
 log = logging.getLogger(__name__)
 
 
-class OptunaPruningSweeper(Sweeper):
+class OptunaPruningSweeperImpl(Sweeper):
     def __init__(
             self,
             sampler: Optional[Union[
                 BaseSampler,
                 Callable[[Mapping[str, Sequence[optuna.samplers._grid.GridValueType]]], GridSampler]
-            ]] = None,
-            pruner: Optional[BasePruner] = None,
+            ]],
+            pruner: Optional[BasePruner],
             direction: Union[
                 Literal["minimize"], Literal["maximize"], StudyDirection,
                 List[Union[Literal["minimize"], Literal["maximize"], StudyDirection]]
-            ] = StudyDirection.MINIMIZE,
-            storage: Optional[Union[str, BaseStorage]] = None,
-            study_name: Optional[str] = None,
-            n_trials: Optional[int] = None,
-            n_jobs: int = 1,
-            params: Optional[DictConfig] = None,
-            custom_search_space: Optional[Union[CustomSearchSpace, List[CustomSearchSpace]]] = None,
-            timeout: Optional[float] = None,
-            catch: Optional[Iterable[Type[Exception]] | Type[Exception]] = None,
-            callbacks: Optional[List[Callable[[Study, FrozenTrial], None]]] = None,
-            gc_after_trial: bool = False,
-            show_progress_bar: bool = False,
-            dask_client: Optional[Callable[[], Client]] = None
-    ) -> None:
+            ],
+            storage: Optional[Union[str, BaseStorage]],
+            study_name: Optional[str],
+            n_trials: Optional[int],
+            n_jobs: int,
+            params: Optional[DictConfig],
+            custom_search_space: Optional[Union[CustomSearchSpace, List[CustomSearchSpace]]],
+            timeout: Optional[float],
+            catch: Optional[Iterable[Type[Exception]] | Type[Exception]],
+            callbacks: Optional[List[Callable[[Study, FrozenTrial], None]]],
+            gc_after_trial: bool,
+            show_progress_bar: bool,
+            dask_client: Optional[Callable[[], Client]]
+    ):
         if n_jobs == 1 and dask_client:
             warnings.warn(
                 "As ``n_jobs=1`` dask is not used. Specify ``n_jobs>1`` to use dask"
@@ -116,7 +117,7 @@ class OptunaPruningSweeper(Sweeper):
             *,
             hydra_context: HydraContext,
             task_function: TaskFunction,
-            config: DictConfig,
+            config: DictConfig
     ) -> None:
         self.config = config
         self.hydra_context = hydra_context
@@ -190,7 +191,7 @@ class OptunaPruningSweeper(Sweeper):
 
         overlap = set.intersection(
             set(self.manual_values.keys()),
-            *[cs.manual_values.keys() for cs in self.custom_search_space]
+            *[cs.manual_values().keys() for cs in self.custom_search_space]
         )
         if len(overlap):
             raise ValueError(
@@ -198,7 +199,7 @@ class OptunaPruningSweeper(Sweeper):
                 f"Overlapping manual values: {list(overlap)}"
             )
         for cs in self.custom_search_space:
-            self.manual_values.update(cs.manual_values)
+            self.manual_values.update(cs.manual_values())
 
     def _setup_grid_sampler(self):
         search_space_for_grid_sampler = {
@@ -281,7 +282,7 @@ class OptunaPruningSweeper(Sweeper):
 
     def _run_trial(self, trial: Trial) -> float | Sequence[float]:
         # Share trial with task_function
-        hydra_plugins.trial_provider.trial = trial
+        trial_provider.trial = trial
 
         overrides = self._configure_trial(trial)
         [ret] = self.launcher.launch([overrides], initial_job_idx=trial.number)

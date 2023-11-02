@@ -4,7 +4,7 @@ from hydra_zen import store
 from optuna import samplers, pruners
 from distributed import Client, LocalCluster, SpecCluster
 
-from .custom_optuna_sweeper import OptunaPruningSweeper
+from .optuna_pruning_sweeper import OptunaPruningSweeper
 
 
 store(
