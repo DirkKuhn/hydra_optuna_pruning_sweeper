@@ -15,7 +15,7 @@ from hydra.plugins.sweeper import Sweeper
 from hydra.types import HydraContext, TaskFunction
 from omegaconf import DictConfig
 
-from hydra_plugins.custom_search_space import CustomSearchSpace
+from hydra_plugins.hydra_optuna_pruning_sweeper.custom_search_space import CustomSearchSpace
 
 if TYPE_CHECKING:
     import optuna

@@ -47,8 +47,8 @@ from optuna.study import MaxTrialsCallback, StudyDirection
 from optuna.integration import DaskStorage
 from dask.distributed import Client, wait
 
-from hydra_plugins import trial_provider
-from hydra_plugins.custom_search_space import CustomSearchSpace
+from hydra_plugins.hydra_optuna_pruning_sweeper import trial_provider
+from hydra_plugins.hydra_optuna_pruning_sweeper.custom_search_space import CustomSearchSpace
 
 
 log = logging.getLogger(__name__)
