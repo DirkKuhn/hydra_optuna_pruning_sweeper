@@ -7,6 +7,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Tuple,
     MutableSequence,
     Optional,
     Sequence,
@@ -27,7 +28,6 @@ from hydra.core.override_parser.types import (
     Transformer
 )
 from hydra.core.plugins import Plugins
-from hydra._internal.core_plugins.basic_launcher import BasicLauncher
 from hydra.plugins.sweeper import Sweeper
 from hydra.types import HydraContext, TaskFunction
 from omegaconf import DictConfig, OmegaConf
@@ -110,7 +110,7 @@ class OptunaPruningSweeperImpl(Sweeper):
         self.sweep_dir: Optional[str] = None
         self.search_space_distributions: Optional[Dict[str, BaseDistribution]] = None
         self.fixed_params: Optional[Dict[str, Any]] = None
-        self.manual_values: Optional[Dict[str, Sequence[Any]]] = None
+        self.manual_values: Optional[Dict[str, List[Any]]] = None
 
     def setup(
             self,
@@ -126,7 +126,8 @@ class OptunaPruningSweeperImpl(Sweeper):
         )
         self.sweep_dir = config.hydra.sweep.dir
 
-        assert isinstance(self.launcher, BasicLauncher), (
+        # For some reason `isinstance` does not work
+        assert self.launcher.__class__.__name__ == 'BasicLauncher', (
             f"This plugin assumes that the ``BasicLauncher`` (the default launcher) is used, "
             f"but got {self.launcher}. If you want to parallelize the hyperparameter search "
             f"simply set ``n_jobs>1``, then dask is used automatically. If you still need "
@@ -148,7 +149,11 @@ class OptunaPruningSweeperImpl(Sweeper):
         params_conf = self._parse_sweeper_params_config()
         params_conf.extend(arguments)
 
-        self._create_params_and_manual_values(params_conf)
+        (
+            self.search_space_distributions,
+            self.fixed_params,
+            self.manual_values
+        ) = create_params_and_manual_values(params_conf, self.custom_search_space)
 
         is_grid_sampler = (
             isinstance(self.sampler, functools.partial)
@@ -157,10 +162,7 @@ class OptunaPruningSweeperImpl(Sweeper):
         if is_grid_sampler:
             self._setup_grid_sampler()
 
-        # Remove fixed parameters from Optuna search space.
-        for param_name in self.fixed_params:
-            if param_name in self.search_space_distributions:
-                del self.search_space_distributions[param_name]
+        self._remove_fixed_params_from_search_space()
 
         if self.n_jobs == 1:
             self._run_sequential()
@@ -172,34 +174,6 @@ class OptunaPruningSweeperImpl(Sweeper):
             return []
 
         return [f"{k!s}={v}" for k, v in self.params.items()]
-
-    def _create_params_and_manual_values(self, arguments: List[str]) -> None:
-        parser = OverridesParser.create()
-        parsed = parser.parse_overrides(arguments)
-        self.search_space_distributions = dict()
-        self.fixed_params = dict()
-        self.manual_values = dict()
-
-        for override in parsed:
-            param_name = override.get_key_element()
-            value = create_optuna_distribution_from_override(override)
-            if isinstance(value, BaseDistribution):
-                self.search_space_distributions[param_name] = value
-                self.manual_values[param_name] = _extract_manual_values_from_tags(override)
-            else:
-                self.fixed_params[param_name] = value
-
-        overlap = set.intersection(
-            set(self.manual_values.keys()),
-            *[cs.manual_values().keys() for cs in self.custom_search_space]
-        )
-        if len(overlap):
-            raise ValueError(
-                "Overlapping manual values found!"
-                f"Overlapping manual values: {list(overlap)}"
-            )
-        for cs in self.custom_search_space:
-            self.manual_values.update(cs.manual_values())
 
     def _setup_grid_sampler(self):
         search_space_for_grid_sampler = {
@@ -214,6 +188,11 @@ class OptunaPruningSweeperImpl(Sweeper):
         log.info(
             f"Updating num of trials to {self.n_trials} due to using GridSampler."
         )
+
+    def _remove_fixed_params_from_search_space(self):
+        for param_name in self.fixed_params:
+            if param_name in self.search_space_distributions:
+                del self.search_space_distributions[param_name]
 
     def _run_sequential(self) -> None:
         study = self._setup_study()
@@ -272,6 +251,9 @@ class OptunaPruningSweeperImpl(Sweeper):
         return study
 
     def _enqueue_manual_values(self, study: Study) -> None:
+        if not self.manual_values:
+            return
+
         num_manual_values = max(len(s) for s in self.manual_values.values())
         for i in range(num_manual_values):
             params = dict()
@@ -364,6 +346,42 @@ class OptunaPruningSweeperImpl(Sweeper):
         )
 
 
+def create_params_and_manual_values(
+        arguments: List[str], custom_search_space: List[CustomSearchSpace]
+) -> Tuple[Dict[str, BaseDistribution], Dict[str, Any], Dict[str, List[Any]]]:
+    parser = OverridesParser.create()
+    parsed = parser.parse_overrides(arguments)
+    search_space_distributions = dict()
+    fixed_params = dict()
+    manual_values = dict()
+
+    for override in parsed:
+        param_name = override.get_key_element()
+        value = create_optuna_distribution_from_override(override)
+        if isinstance(value, BaseDistribution):
+            search_space_distributions[param_name] = value
+            mv = _extract_manual_values_from_tags(override)
+            if mv:
+                manual_values[param_name] = mv
+        else:
+            fixed_params[param_name] = value
+
+    if bool(manual_values) and bool(custom_search_space):
+        overlap = set.intersection(
+            set(manual_values.keys()),
+            *[cs.manual_values().keys() for cs in custom_search_space]
+        )
+        if len(overlap):
+            raise ValueError(
+                "Overlapping manual values found!"
+                f"Overlapping manual values: {list(overlap)}"
+            )
+    for cs in custom_search_space:
+        manual_values.update(cs.manual_values())
+
+    return search_space_distributions, fixed_params, manual_values
+
+
 def create_optuna_distribution_from_override(override: Override) -> Any:
     if not override.is_sweep_override():
         return override.get_value_element_as_str()
@@ -414,14 +432,16 @@ def create_optuna_distribution_from_override(override: Override) -> Any:
     raise NotImplementedError(f"{override} is not supported by Optuna sweeper.")
 
 
-def _extract_manual_values_from_tags(override: Override) -> Sequence[Any]:
+def _extract_manual_values_from_tags(override: Override) -> Optional[List[Any]]:
     assert override.is_sweep_override()
     manual_values = [t.split(":", maxsplit=1) for t in override.value().tags if t != "log"]
+    if not manual_values:
+        return None
     manual_values = [(int(pos), val) for pos, val in manual_values]
     assert (
         set(range(len(manual_values))) == set(pos for pos, _ in manual_values)
     ), (f"Expected manual values for {override.get_key_element()} to be numbered from 0 "
-        f"to {len(manual_values)-1} but got numbers {set(pos for pos, _ in manual_values)}.")
+        f"to {len(manual_values)-1} but got numbers {[pos for pos, _ in manual_values]}.")
 
     def extract_value(val: str) -> Any:
         from ast import literal_eval
@@ -443,7 +463,7 @@ def _to_grid_sampler_choices(distribution: BaseDistribution) -> Any:
         assert (
                 distribution.step is not None
         ), "`step` of IntDistribution and FloatDistribution must be a positive number."
-        n_items = (distribution.high - distribution.low) // distribution.step
+        n_items = int((distribution.high - distribution.low) // distribution.step)
         return [distribution.low + i * distribution.step for i in range(n_items)]
     else:
         raise ValueError("GridSampler only supports discrete distributions.")

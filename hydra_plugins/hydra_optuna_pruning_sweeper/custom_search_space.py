@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import (
     Any,
     Dict,
-    Sequence
+    List
 )
 
 from omegaconf import DictConfig
@@ -10,7 +10,7 @@ from optuna.trial import Trial
 
 
 class CustomSearchSpace(ABC):
-    def manual_values(self) -> Dict[str, Sequence[Any]]:
+    def manual_values(self) -> Dict[str, List[Any]]:
         return dict()
 
     @abstractmethod
@@ -24,7 +24,7 @@ class ListSearchSpace(CustomSearchSpace):
             name: str,
             min_entries: int, max_entries: int,
             min_value: float, max_value: float,
-            manual_values: Sequence[Any]
+            manual_values: List[Any]
     ):
         assert min_entries < max_entries, f"``min_entries`` should be lower than ``max_entries``!"
         assert min_value < max_value, f"``min_value`` should be lower than ``max_value``!"
@@ -36,7 +36,7 @@ class ListSearchSpace(CustomSearchSpace):
         self._manual_values = manual_values
         self.use_float = isinstance(min_value, float) or isinstance(max_value, float)
 
-    def manual_values(self) -> Dict[str, Sequence[Any]]:
+    def manual_values(self) -> Dict[str, List[Any]]:
         return {self.name: self._manual_values}
 
     def suggest(self, cfg: DictConfig, trial: Trial) -> Dict[str, Any]:
