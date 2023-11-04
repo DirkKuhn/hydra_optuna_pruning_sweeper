@@ -4,7 +4,7 @@ import hydra
 from omegaconf import DictConfig
 from optuna.trial import Trial
 
-from hydra_plugins.hydra_optuna_pruning_sweeper.custom_search_space import CustomSearchSpace
+from hydra_plugins.hydra_optuna_pruning_sweeper import CustomSearchSpace
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")

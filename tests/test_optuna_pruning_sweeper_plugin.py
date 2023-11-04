@@ -85,6 +85,8 @@ def test_create_optuna_distribution_from_override(input: str, expected: BaseDist
                 {"key2": "5"}, {},
             ),
         ),
+        (['key=tag("1", choice(1,2))'], ({"key": CategoricalDistribution([1, 2])}, {}, {"key": [1]})),
+        (['key=tag("false", choice(false,true))'], ({"key": CategoricalDistribution([False, True])}, {}, {"key": [False]})),
         (["key=tag(0:1, choice(1,2))"], ({"key": CategoricalDistribution([1, 2])}, {}, {"key": [1]})),
         (["key=tag(0:1, 1:2, choice(1,2))"], ({"key": CategoricalDistribution([1, 2])}, {}, {"key": [1, 2]})),
         (

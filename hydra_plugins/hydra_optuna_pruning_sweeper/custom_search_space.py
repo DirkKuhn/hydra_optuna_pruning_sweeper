@@ -24,7 +24,7 @@ class ListSearchSpace(CustomSearchSpace):
             name: str,
             min_entries: int, max_entries: int,
             min_value: float, max_value: float,
-            manual_values: List[Any]
+            use_float: bool, manual_values: List[Any]
     ):
         assert min_entries < max_entries, f"``min_entries`` should be lower than ``max_entries``!"
         assert min_value < max_value, f"``min_value`` should be lower than ``max_value``!"
@@ -34,7 +34,7 @@ class ListSearchSpace(CustomSearchSpace):
         self.min_value = min_value
         self.max_value = max_value
         self._manual_values = manual_values
-        self.use_float = isinstance(min_value, float) or isinstance(max_value, float)
+        self.use_float = use_float
 
     def manual_values(self) -> Dict[str, List[Any]]:
         return {self.name: self._manual_values}

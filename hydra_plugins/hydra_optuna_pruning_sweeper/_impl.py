@@ -17,6 +17,7 @@ from typing import (
     Mapping,
     Type
 )
+from operator import itemgetter
 
 import optuna
 from hydra.core.override_parser.overrides_parser import OverridesParser
@@ -48,7 +49,7 @@ from optuna.integration import DaskStorage
 from dask.distributed import Client, wait
 
 from hydra_plugins.hydra_optuna_pruning_sweeper import trial_provider
-from hydra_plugins.hydra_optuna_pruning_sweeper.custom_search_space import CustomSearchSpace
+from hydra_plugins.hydra_optuna_pruning_sweeper import CustomSearchSpace
 
 
 log = logging.getLogger(__name__)
@@ -93,10 +94,10 @@ class OptunaPruningSweeperImpl(Sweeper):
         self.params = params
         if custom_search_space is None:
             self.custom_search_space = []
-        elif isinstance(custom_search_space, CustomSearchSpace):
-            self.custom_search_space = [custom_search_space]
-        else:
+        elif isinstance(custom_search_space, Sequence):
             self.custom_search_space = custom_search_space
+        else:
+            self.custom_search_space = [custom_search_space]
 
         self.pruner = pruner
         self.timeout = timeout
@@ -434,26 +435,42 @@ def create_optuna_distribution_from_override(override: Override) -> Any:
 
 def _extract_manual_values_from_tags(override: Override) -> Optional[List[Any]]:
     assert override.is_sweep_override()
-    manual_values = [t.split(":", maxsplit=1) for t in override.value().tags if t != "log"]
+    manual_values = [t for t in override.value().tags if t != "log"]
     if not manual_values:
         return None
-    manual_values = [(int(pos), val) for pos, val in manual_values]
-    assert (
-        set(range(len(manual_values))) == set(pos for pos, _ in manual_values)
-    ), (f"Expected manual values for {override.get_key_element()} to be numbered from 0 "
-        f"to {len(manual_values)-1} but got numbers {[pos for pos, _ in manual_values]}.")
 
-    def extract_value(val: str) -> Any:
-        from ast import literal_eval
-        try:
-            mv = literal_eval(val)
-        except ValueError:
-            mv = val
-        return mv
+    if len(manual_values) == 1 and ":" in manual_values[0] or len(manual_values) > 1:
+        assert all(":" in t for t in manual_values), (
+            'Preface each manual value with "idx:" where idx is its zero based index, '
+            f'if there is more than just one manual value. Error for {override.get_key_element()}.'
+        )
+        manual_values = [t.split(":", maxsplit=1) for t in manual_values]
+        manual_values = [(int(pos), val) for pos, val in manual_values]
+        assert (
+            set(range(len(manual_values))) == set(pos for pos, _ in manual_values)
+        ), (f"Expected manual values for {override.get_key_element()} to be numbered from 0 "
+            f"to {len(manual_values)-1} but got numbers {[pos for pos, _ in manual_values]}.")
+        manual_values = [val for _, val in sorted(manual_values, key=itemgetter(0))]
 
-    from operator import itemgetter
-    manual_values = [extract_value(val) for _, val in sorted(manual_values, key=itemgetter(0))]
+    manual_values = [_extract_value(val) for val in manual_values]
     return manual_values
+
+
+def _extract_value(val: str) -> Any:
+    from ast import literal_eval
+
+    if val == 'false':
+        return False
+    elif val == 'true':
+        return True
+    elif val == 'null':
+        return None
+
+    try:
+        mv = literal_eval(val)
+    except ValueError:
+        mv = val
+    return mv
 
 
 def _to_grid_sampler_choices(distribution: BaseDistribution) -> Any:
