@@ -15,9 +15,11 @@ from typing import (
     Union,
     Literal,
     Mapping,
-    Type
+    Type,
+    Container
 )
 from operator import itemgetter
+from pathlib import Path
 
 import optuna
 from hydra.core.override_parser.overrides_parser import OverridesParser
@@ -43,7 +45,7 @@ from optuna.distributions import (
 from optuna.samplers import BaseSampler, GridSampler
 from optuna.pruners import BasePruner
 from optuna.storages import BaseStorage
-from optuna.trial import Trial, FrozenTrial
+from optuna.trial import Trial, FrozenTrial, TrialState
 from optuna.study import MaxTrialsCallback, StudyDirection
 from optuna.integration import DaskStorage
 from dask.distributed import Client, wait
@@ -55,6 +57,9 @@ from hydra_plugins.hydra_optuna_pruning_sweeper import CustomSearchSpace
 log = logging.getLogger(__name__)
 
 
+DirectionType = Union[Literal["minimize"], Literal["maximize"], StudyDirection]
+
+
 class OptunaPruningSweeperImpl(Sweeper):
     def __init__(
             self,
@@ -63,13 +68,11 @@ class OptunaPruningSweeperImpl(Sweeper):
                 Callable[[Mapping[str, Sequence[optuna.samplers._grid.GridValueType]]], GridSampler]
             ]],
             pruner: Optional[BasePruner],
-            direction: Union[
-                Literal["minimize"], Literal["maximize"], StudyDirection,
-                List[Union[Literal["minimize"], Literal["maximize"], StudyDirection]]
-            ],
+            direction: Union[DirectionType, List[DirectionType]],
             storage: Optional[Union[str, BaseStorage]],
             study_name: Optional[str],
             n_trials: Optional[int],
+            n_trials_states: Optional[Container[TrialState]],
             n_jobs: int,
             params: Optional[DictConfig],
             custom_search_space: Optional[Union[CustomSearchSpace, List[CustomSearchSpace]]],
@@ -90,6 +93,7 @@ class OptunaPruningSweeperImpl(Sweeper):
         self.storage = storage
         self.study_name = study_name
         self.n_trials = n_trials
+        self.n_trials_states = n_trials_states
         self.n_jobs = n_jobs
         self.params = params
         if custom_search_space is None:
@@ -126,6 +130,8 @@ class OptunaPruningSweeperImpl(Sweeper):
             config=config, hydra_context=hydra_context, task_function=task_function
         )
         self.sweep_dir = config.hydra.sweep.dir
+        # Already create directory, in case the study is placed there
+        Path(str(self.sweep_dir)).mkdir(parents=True, exist_ok=True)
 
         # For some reason `isinstance` does not work
         assert self.launcher.__class__.__name__ == 'BasicLauncher', (
@@ -199,10 +205,9 @@ class OptunaPruningSweeperImpl(Sweeper):
         study = self._setup_study()
         study.optimize(
             func=self._run_trial,
-            n_trials=self.n_trials,
             timeout=self.timeout,
             catch=self.catch,
-            callbacks=self.callbacks,
+            callbacks=self._setup_callbacks(),
             gc_after_trial=self.gc_after_trial,
             show_progress_bar=self.show_progress_bar
         )
@@ -222,10 +227,7 @@ class OptunaPruningSweeperImpl(Sweeper):
                     n_trials=self.n_trials,
                     timeout=self.timeout,
                     catch=self.catch,
-                    callbacks=[
-                        MaxTrialsCallback(n_trials=self.n_trials, states=None),
-                        *self.callbacks
-                    ],
+                    callbacks=self._setup_callbacks(),
                     gc_after_trial=self.gc_after_trial,
                     show_progress_bar=self.show_progress_bar,
                     pure=False
@@ -318,12 +320,22 @@ class OptunaPruningSweeperImpl(Sweeper):
 
         return tuple(f"{name}={val}" for name, val in params.items())
 
+    def _setup_callbacks(self) -> List[Callable[[Study, FrozenTrial], None]]:
+        if self.n_trials is None:
+            return self.callbacks
+        else:
+            return [
+                MaxTrialsCallback(n_trials=self.n_trials, states=self.n_trials_states),
+                *self.callbacks
+            ]
+
     def _serialize_results(self, study: Study) -> None:
         results_to_serialize: Dict[str, Any]
         if len(self.directions) < 2:
             best_trial = study.best_trial
             results_to_serialize = {
                 "name": "optuna",
+                "number": best_trial.number,
                 "best_params": best_trial.params,
                 "best_value": best_trial.value,
             }
@@ -332,7 +344,8 @@ class OptunaPruningSweeperImpl(Sweeper):
         else:
             best_trials = study.best_trials
             pareto_front = [
-                {"params": t.params, "values": t.values} for t in best_trials
+                {"number": t.number, "params": t.params, "values": t.values}
+                for t in best_trials
             ]
             results_to_serialize = {
                 "name": "optuna",

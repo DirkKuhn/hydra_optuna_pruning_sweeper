@@ -5,9 +5,9 @@ from typing import (
         Sequence,
         Iterable,
         Union,
-        Literal,
         Mapping,
         Type,
+        Container,
         TYPE_CHECKING
     )
 
@@ -23,9 +23,9 @@ if TYPE_CHECKING:
     from optuna.samplers import BaseSampler, GridSampler
     from optuna.pruners import BasePruner
     from optuna.storages import BaseStorage
-    from optuna.trial import FrozenTrial
-    from optuna.study import StudyDirection
+    from optuna.trial import FrozenTrial, TrialState
     from dask.distributed import Client
+    from ._impl import DirectionType
 
 
 class OptunaPruningSweeper(Sweeper):
@@ -38,13 +38,11 @@ class OptunaPruningSweeper(Sweeper):
                 Callable[[Mapping[str, Sequence["optuna.samplers._grid.GridValueType"]]], "GridSampler"]
             ]] = None,
             pruner: Optional["BasePruner"] = None,
-            direction: Union[
-                Literal["minimize"], Literal["maximize"], "StudyDirection",
-                List[Union[Literal["minimize"], Literal["maximize"], "StudyDirection"]]
-            ] = "minimize",
+            direction: Union["DirectionType", List["DirectionType"]] = "minimize",
             storage: Optional[Union[str, "BaseStorage"]] = None,
             study_name: Optional[str] = None,
             n_trials: Optional[int] = None,
+            n_trials_states: Optional[Container["TrialState"]] = None,
             n_jobs: int = 1,
             params: Optional[DictConfig] = None,
             custom_search_space: Optional[Union[CustomSearchSpace, List[CustomSearchSpace]]] = None,
@@ -64,6 +62,7 @@ class OptunaPruningSweeper(Sweeper):
             storage=storage,
             study_name=study_name,
             n_trials=n_trials,
+            n_trials_states=n_trials_states,
             n_jobs=n_jobs,
             params=params,
             custom_search_space=custom_search_space,

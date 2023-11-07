@@ -2,7 +2,8 @@ from abc import ABC, abstractmethod
 from typing import (
     Any,
     Dict,
-    List
+    List,
+    Sequence
 )
 
 from omegaconf import DictConfig
@@ -24,7 +25,7 @@ class ListSearchSpace(CustomSearchSpace):
             name: str,
             min_entries: int, max_entries: int,
             min_value: float, max_value: float,
-            use_float: bool, manual_values: List[Any]
+            use_float: bool, manual_values: Sequence[Any]
     ):
         assert min_entries < max_entries, f"``min_entries`` should be lower than ``max_entries``!"
         assert min_value < max_value, f"``min_value`` should be lower than ``max_value``!"
@@ -33,7 +34,7 @@ class ListSearchSpace(CustomSearchSpace):
         self.max_entries = max_entries
         self.min_value = min_value
         self.max_value = max_value
-        self._manual_values = manual_values
+        self._manual_values = [list(mv) for mv in manual_values]
         self.use_float = use_float
 
     def manual_values(self) -> Dict[str, List[Any]]:
