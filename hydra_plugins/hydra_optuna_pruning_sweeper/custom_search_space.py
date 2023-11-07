@@ -11,12 +11,29 @@ from optuna.trial import Trial
 
 
 class CustomSearchSpace(ABC):
+    """
+    Override this class to specify a custom search space with optionally manual values.
+    """
     def manual_values(self) -> Dict[str, List[Any]]:
+        """
+        Override to specify manual values.
+
+        :return: Map from hyperparameter name to a list of manual
+            values which are sorted in the order in which they are tried.
+            Each name should correspond to a value returned by ``suggest``.
+        """
         return dict()
 
     @abstractmethod
     def suggest(self, cfg: DictConfig, trial: Trial) -> Dict[str, Any]:
-        pass
+        """
+        Override to construct a dynamic search space using the ``optuna.trial.Trial`` object.
+
+        :param cfg: Map which contains the output configuration assembled by hydra.
+        :param trial: ``optuna.trial.Trial`` which contains the already suggested values under
+            its property ``params`` and values of fixed params under its property ``user_attrs``.
+        :return: Map from hyperparameter name to the next value to try.
+        """
 
 
 class ListSearchSpace(CustomSearchSpace):

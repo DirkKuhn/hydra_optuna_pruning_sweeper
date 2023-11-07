@@ -300,10 +300,10 @@ class OptunaPruningSweeperImpl(Sweeper):
             name: trial._suggest(name, distribution)
             for name, distribution in self.search_space_distributions.items()
         }
-        assert self.config is not None
-        custom_params = [cs.suggest(self.config, trial) for cs in self.custom_search_space]
         for name, value in self.fixed_params.items():
             trial.set_user_attr(name, value)
+        assert self.config is not None
+        custom_params = [cs.suggest(self.config, trial) for cs in self.custom_search_space]
 
         overlap = set.intersection(
             set(params.keys()), trial.user_attrs, *[d.keys() for d in custom_params]
@@ -398,7 +398,7 @@ def create_params_and_manual_values(
 
 def create_optuna_distribution_from_override(override: Override) -> Any:
     if not override.is_sweep_override():
-        return override.get_value_element_as_str()
+        return override.value()
 
     value = override.value()
     choices: List[CategoricalChoiceType] = []

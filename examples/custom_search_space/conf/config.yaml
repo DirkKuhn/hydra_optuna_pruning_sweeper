@@ -16,6 +16,7 @@ hydra:
     params:
       x: tag(0:1, 1:2, interval(-5, 5))
       y: tag(0:3, 1:4, interval(-5, 5))
+      a: 100
     # `custom_search_space` should either refer to a single
     # implementation of the class `CustomSearchSpace` or
     # to a list of these.
