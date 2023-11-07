@@ -335,7 +335,7 @@ class OptunaPruningSweeperImpl(Sweeper):
             best_trial = study.best_trial
             results_to_serialize = {
                 "name": "optuna",
-                "number": best_trial.number,
+                "trial_number": best_trial.number,
                 "best_params": best_trial.params,
                 "best_value": best_trial.value,
             }
@@ -344,7 +344,7 @@ class OptunaPruningSweeperImpl(Sweeper):
         else:
             best_trials = study.best_trials
             pareto_front = [
-                {"number": t.number, "params": t.params, "values": t.values}
+                {"trial_number": t.number, "params": t.params, "values": t.values}
                 for t in best_trials
             ]
             results_to_serialize = {
