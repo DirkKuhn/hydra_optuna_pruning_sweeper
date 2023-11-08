@@ -35,10 +35,5 @@ class MyCustomSearchSpace(CustomSearchSpace):
         return {self.z_name: z_value, self.w_name: w_value}
 
 
-def setup_dask(n_workers: int):
-    from dask.distributed import Client
-    return Client(n_workers=n_workers)
-
-
 if __name__ == "__main__":
     multi_dimensional_sphere()

@@ -1,0 +1,24 @@
+defaults:
+  - override hydra/sweeper: OptunaPruningSweeper
+  - _self_
+
+hydra:
+  sweeper:
+    direction: minimize
+    study_name: sphere
+    storage: null
+    n_trials: 10
+    n_jobs: 2
+    params:
+      x: interval(-5.5, 5.5)
+      y: choice(-5, 0, 5)
+    dask_client:
+      # If no arguments need to be passed the following could be used as well:
+      # _target_: hydra.utils.get_method
+      # path: objective.setup_dask
+      _target_: objective.setup_dask
+      n_workers: ${..n_jobs}
+      _partial_: true
+
+x: 1
+y: 1
