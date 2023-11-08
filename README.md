@@ -52,7 +52,12 @@ preferably in an activated virtual environment (```pip install -e``` does not wo
 
 ## Usage
 
+The ```examples``` package includes the adapted examples provided with the original plugin.
+A more complicated deep-learning example can be found here ...
+
 This plugin can mostly be used like the original. However, it has more options.
+For more information please take a look at the doc-strings of ``optuna_pruning_sweeper.OptunaPruningSweeper``
+and ``custom_search_space.CustomSearchSpace``.
 Please set ```hydra/sweeper``` to ```OptunaPruningSweeper``` in your config file.
 ```yaml
 defaults:
@@ -61,9 +66,6 @@ defaults:
 Alternatively, add the ```hydra/sweeper=OptunaPruningSweeper``` option to your command line.
 The default configuration simply consists of the default values of the ```OptunaPruningSweeper```
 class in the ```optuna_pruning_sweeper.py``` module.
-
-The ```examples``` package includes the adapted examples provided with the original plugin.
-A more complicated deep-learning example can be found here ...
 
 ### Search space configuration
 
@@ -118,8 +120,8 @@ like garbage collection after each trial and more customization options concerni
 
 Two methods can be used to parallelize the hyperparameter search.
 
-First, if ``n_workers>1`` the storage is wrapped
-in optuna's ``DaskStorage`` which is used to start ``num_workers`` parallel executions of ``study.optimize`` on the
+First, if ``n_jobs>1`` the storage is wrapped
+in optuna's ``DaskStorage`` which is used to start ``num_jobs`` parallel executions of ``study.optimize`` on the
 specified dask cluster. Libraries like [Dask-Jobqueue](https://jobqueue.dask.org/en/latest/) or
 [Dask-MPI](https://mpi.dask.org/en/latest/) can be used to set up a dask cluster over multiple nodes by passing a
 callable to the argument ``dask_client``.

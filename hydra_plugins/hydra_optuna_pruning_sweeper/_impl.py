@@ -108,7 +108,7 @@ class OptunaPruningSweeperImpl(Sweeper):
         self.catch = () if catch is not None else catch
         self.callbacks = callbacks if callbacks else []
         self.gc_after_trial = gc_after_trial
-        self.show_progress_bar = show_progress_bar
+        self.show_progress_bar = show_progress_bar and n_jobs == 1
 
         self.dask_client = dask_client
 
@@ -398,7 +398,7 @@ def create_params_and_manual_values(
 
 def create_optuna_distribution_from_override(override: Override) -> Any:
     if not override.is_sweep_override():
-        return override.value()
+        return override.get_value_element_as_str()
 
     value = override.value()
     choices: List[CategoricalChoiceType] = []

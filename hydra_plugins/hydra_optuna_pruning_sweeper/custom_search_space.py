@@ -12,7 +12,7 @@ from optuna.trial import Trial
 
 class CustomSearchSpace(ABC):
     """
-    Override this class to specify a custom search space with optionally manual values.
+    Override this class to specify a custom search space with optional manual values.
     """
     def manual_values(self) -> Dict[str, List[Any]]:
         """
@@ -44,6 +44,19 @@ class ListSearchSpace(CustomSearchSpace):
             min_value: float, max_value: float,
             use_float: bool, manual_values: Sequence[Any]
     ):
+        """
+        Example implementation of ``CustomSearchSpace`` which suggests a list of variable length.
+        It can be used to suggest the architecture of a fully connected neural network.
+
+        :param name: Name of the parameter for which a list of values should be suggested.
+        :param min_entries: The minimum number of list entries.
+        :param max_entries: The maximum number of list entries.
+        :param min_value: The minimum value of each list entry.
+        :param max_value: The maximum value of each list entry.
+        :param use_float: Whether to suggest ints for floats for the list entries.
+        :param manual_values: Sequence of fixed lists which should be
+            tried before new values are suggested by the sampler.
+        """
         assert min_entries < max_entries, f"``min_entries`` should be lower than ``max_entries``!"
         assert min_value < max_value, f"``min_value`` should be lower than ``max_value``!"
         self.name = name
