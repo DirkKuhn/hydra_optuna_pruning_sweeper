@@ -12,7 +12,8 @@ from optuna.trial import Trial
 
 class CustomSearchSpace(ABC):
     """
-    Override this class to specify a custom search space with optional manual values.
+    Override this class to specify a dynamic search space with optional manual values.
+    See https://optuna.readthedocs.io/en/stable/tutorial/10_key_features/002_configurations.html
     """
     def manual_values(self) -> Dict[str, List[Any]]:
         """
