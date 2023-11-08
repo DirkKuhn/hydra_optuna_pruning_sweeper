@@ -61,7 +61,8 @@ preferably in an activated virtual environment (```pip install -e``` does not wo
 ## Usage
 
 The ```examples``` package includes the adapted examples provided with the original plugin.
-A more complicated deep-learning example can be found here ...
+A more complicated deep-learning example can be found here
+[lightning_hydra_optuna_pruning_example](https://github.com/DirkKuhn/lightning_hydra_optuna_pruning_example)
 
 This plugin can mostly be used like the original. However, it has more options.
 For more information please take a look at the doc-strings of ``optuna_pruning_sweeper.OptunaPruningSweeper``
