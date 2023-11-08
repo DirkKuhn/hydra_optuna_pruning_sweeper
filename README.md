@@ -15,11 +15,19 @@ this plugin has the following advantages:
         ...
     ...
   ```
-+ Manual specification of hyperparameters which are used at the beginning of the hyperparameter search.
-+ Simple parallelization across processes with the ``DaskStorage`` simply by specifying ``n_workers>1``.
-+ Parallelization across nodes with the ``DaskStorage`` by specifying a dask ``Client``.
+  in the objective function.
++ Manual specification of hyperparameters which are used at the beginning of the hyperparameter search
+  (see https://optuna.readthedocs.io/en/stable/tutorial/20_recipes/008_specify_params.html).
++ Simple parallelization across processes with the
+  [``optuna.integration.DaskStorage``](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.integration.DaskStorage.html#optuna.integration.DaskStorage)
+  simply by specifying ``n_workers>1``.
++ Parallelization across nodes with the
+  [``optuna.integration.DaskStorage``](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.integration.DaskStorage.html#optuna.integration.DaskStorage)
+  by specifying a dask ``Client``.
 + More powerful custom search spaces. For example, a variable length list of values can be suggested.
-+ It internally uses optuna's ``study.optimize`` which can be freely configured.
++ It internally uses
+  [``optuna.study.Study.optimize``](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.study.Study.html#optuna.study.Study.optimize)
+  which can be freely configured.
 + It uses ``optuna>=3.1.0``. This is only an advantage until
   [keisuke-umezawa's Pull Request](https://github.com/facebookresearch/hydra/pull/2360) is merged.
 
@@ -28,10 +36,10 @@ Before using consider the following disadvantages:
 - This plugin is supposed to be used with the ``BasicLauncher``.
   Different launchers like the [Submitit Launcher plugin](https://hydra.cc/docs/plugins/submitit_launcher/)
   are not supported.
-- The deprecated parameter ``search_space`` from the original as been removed.
+- The deprecated parameter ``search_space`` from the original has been removed.
 - This plugin internally uses [hydra_zen](https://mit-ll-responsible-ai.github.io/hydra-zen/) for configuration.
   It requires importing ``optuna`` and ``dask.distributed``.
-  Both might be imported even if this plugin is not used and thus, once installed, can slow down starting hydra.
+  Both might be imported even if this plugin is not used and thus, once installed, it can slow down starting hydra.
 - This plugin does not seek to improve the architecture of hydra nor does it allow the usage of hyperparameter search
   libraries other than optuna.
 - Fewer people use this plugin. Therefore, it might not be as robust as the original. 
@@ -112,7 +120,9 @@ object can be passed (similar to the singleton design pattern).
 
 ### Sweeping
 
-Unlike the original Optuna sweeper, I use optuna's ``study.optimize`` method to carry out the sweep.
+Unlike the original Optuna sweeper, I use
+[``optuna.study.Study.optimize``](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.study.Study.html#optuna.study.Study.optimize)
+method to carry out the sweep.
 This should improve the robustness of the code and allow for the usage of further features from optuna
 like garbage collection after each trial and more customization options concerning how many trials are run.
 
@@ -120,19 +130,26 @@ like garbage collection after each trial and more customization options concerni
 
 Two methods can be used to parallelize the hyperparameter search.
 
-First, if ``n_jobs>1`` the storage is wrapped
-in optuna's ``DaskStorage`` which is used to start ``num_jobs`` parallel executions of ``study.optimize`` on the
-specified dask cluster. Libraries like [Dask-Jobqueue](https://jobqueue.dask.org/en/latest/) or
+First, if ``n_jobs>1`` the storage is wrapped in
+[``optuna.integration.DaskStorage``](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.integration.DaskStorage.html#optuna.integration.DaskStorage)
+which is used to start ``num_jobs`` parallel executions of
+[``optuna.study.Study.optimize``](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.study.Study.html#optuna.study.Study.optimize)
+on the specified dask cluster. Libraries like [Dask-Jobqueue](https://jobqueue.dask.org/en/latest/) or
 [Dask-MPI](https://mpi.dask.org/en/latest/) can be used to set up a dask cluster over multiple nodes by passing a
-callable to the argument ``dask_client``.
+callable to the argument ``dask_client`` (see ``examples/sphere_custom_dask_client for an example``).
 
-Another way to parallelize the hyperparameter search is to set up an RDB Backend or ``JournalStorage`` which
-each process can access. And start multiple processes from the command line which each carry out the hyperparameter
-search, as described [here](https://optuna.readthedocs.io/en/stable/tutorial/10_key_features/004_distributed.html).
+Another way to parallelize the hyperparameter search is to set up an RDB Backend or
+[``optuna.storages.JournalStorage``](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.storages.JournalStorage.html#optuna.storages.JournalStorage)
+which each process can access. And start multiple processes from the command line which each carry out the
+hyperparameter search, as described [here](https://optuna.readthedocs.io/en/stable/tutorial/10_key_features/004_distributed.html).
 
 ### Further Remarks
 
-To improve robustness I mainly rely on optuna's ``study.optimize`` and ``DaskStorage``. Further, some code has
+To improve robustness I mainly rely on
+[``optuna.study.Study.optimize``](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.study.Study.html#optuna.study.Study.optimize)
+and
+[``optuna.integration.DaskStorage``](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.integration.DaskStorage.html#optuna.integration.DaskStorage)
+. Further, some code has
 been adapted from the original [Optuna Sweeper plugin](https://hydra.cc/docs/plugins/optuna_sweeper/) and [keisuke-umezawa's Pull Request](https://github.com/facebookresearch/hydra/pull/2360).
 
 
